@@ -3,9 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 import logging
 from pathlib import Path
+import random
 from typing import Any
 
 from telethon import TelegramClient
+from telethon import functions, types
 from telethon.errors import SessionPasswordNeededError
 from telethon.tl.types import User
 
@@ -22,6 +24,12 @@ class CodeRequest:
     code_length: int | None
     already_authorized: bool = False
     user: User | None = None
+
+
+@dataclass(frozen=True)
+class EmailCodeRequest:
+    email_pattern: str
+    code_length: int
 
 
 def client_for(
@@ -89,6 +97,16 @@ async def send_code(
         await client.disconnect()
 
 
+def code_request_from_sent_code(sent) -> CodeRequest:
+    return CodeRequest(
+        phone_code_hash=sent.phone_code_hash,
+        delivery_type=type(sent.type).__name__,
+        next_type=type(sent.next_type).__name__ if sent.next_type else None,
+        timeout=sent.timeout,
+        code_length=getattr(sent.type, "length", None),
+    )
+
+
 async def sign_in_code(
     session_path: Path,
     phone: str,
@@ -106,6 +124,101 @@ async def sign_in_code(
         if me is None:
             raise RuntimeError("Login succeeded but account info is empty")
         return me
+    finally:
+        await client.disconnect()
+
+
+async def send_login_email_code(
+    session_path: Path,
+    phone: str,
+    phone_code_hash: str,
+    email: str,
+    api_id: int,
+    api_hash: str,
+    runtime: dict[str, str],
+) -> EmailCodeRequest:
+    client = client_for(session_path, api_id, api_hash, runtime)
+    await client.connect()
+    try:
+        result = await client(
+            functions.account.SendVerifyEmailCodeRequest(
+                purpose=types.EmailVerifyPurposeLoginSetup(phone, phone_code_hash),
+                email=email,
+            )
+        )
+        return EmailCodeRequest(
+            email_pattern=result.email_pattern,
+            code_length=result.length,
+        )
+    finally:
+        await client.disconnect()
+
+
+async def verify_login_email_code(
+    session_path: Path,
+    phone: str,
+    phone_code_hash: str,
+    email_code: str,
+    api_id: int,
+    api_hash: str,
+    runtime: dict[str, str],
+) -> CodeRequest:
+    client = client_for(session_path, api_id, api_hash, runtime)
+    await client.connect()
+    try:
+        result = await client(
+            functions.account.VerifyEmailRequest(
+                purpose=types.EmailVerifyPurposeLoginSetup(phone, phone_code_hash),
+                verification=types.EmailVerificationCode(email_code),
+            )
+        )
+        if isinstance(result, types.account.EmailVerifiedLogin):
+            return code_request_from_sent_code(result.sent_code)
+        raise RuntimeError("Telegram подтвердил email, но не вернул код для телефона")
+    finally:
+        await client.disconnect()
+
+
+def random_signup_name() -> tuple[str, str]:
+    first_names = (
+        "Alex",
+        "Daniel",
+        "Mark",
+        "Nick",
+        "Ryan",
+        "Sam",
+        "Tim",
+        "Victor",
+    )
+    return random.choice(first_names), ""
+
+
+async def sign_up_account(
+    session_path: Path,
+    phone: str,
+    phone_code_hash: str,
+    api_id: int,
+    api_hash: str,
+    runtime: dict[str, str],
+    *,
+    first_name: str | None = None,
+    last_name: str | None = None,
+) -> User:
+    first_name, default_last_name = random_signup_name() if not first_name else (first_name, "")
+    last_name = default_last_name if last_name is None else last_name
+    client = client_for(session_path, api_id, api_hash, runtime)
+    await client.connect()
+    try:
+        result = await client(
+            functions.auth.SignUpRequest(
+                phone_number=phone,
+                phone_code_hash=phone_code_hash,
+                first_name=first_name,
+                last_name=last_name,
+                no_joined_notifications=True,
+            )
+        )
+        return await client._on_login(result.user)
     finally:
         await client.disconnect()
 

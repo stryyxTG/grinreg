@@ -13,7 +13,7 @@ from aiogram import BaseMiddleware, F, Router
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, FSInputFile, Message, TelegramObject
-from telethon.errors import SessionPasswordNeededError
+from telethon.errors import PhoneNumberUnoccupiedError, SessionPasswordNeededError
 
 from tglol.config import Config
 from tglol.db import (
@@ -40,7 +40,16 @@ from tglol.keyboards import (
 )
 from tglol.paths import unique_path
 from tglol.states import AddByCode
-from tglol.telegram_service import inspect_session, send_code, sign_in_code, sign_in_password, user_fields
+from tglol.telegram_service import (
+    inspect_session,
+    send_code,
+    send_login_email_code,
+    sign_in_code,
+    sign_in_password,
+    sign_up_account,
+    user_fields,
+    verify_login_email_code,
+)
 
 
 router = Router()
@@ -197,6 +206,7 @@ def _delivery_type_label(raw_type: str | None) -> str:
         "SentCodeTypeFlashCall": "flash-call",
         "SentCodeTypeMissedCall": "пропущенным звонком",
         "SentCodeTypeEmailCode": "на email",
+        "SentCodeTypeSetUpEmailRequired": "требуется указать email",
         "CodeTypeSms": "SMS",
         "CodeTypeCall": "звонком",
         "CodeTypeFlashCall": "flash-call",
@@ -218,6 +228,9 @@ def _code_request_text(request) -> str:
         lines.append(f"Следующий способ: {_delivery_type_label(request.next_type)}")
     if request.timeout:
         lines.append(f"Повторный запрос будет доступен примерно через {request.timeout} сек.")
+    if request.delivery_type == "SentCodeTypeSetUpEmailRequired":
+        lines.append("")
+        lines.append("Telegram просит привязать email перед продолжением регистрации.")
     lines.append("")
     lines.append("Введите код кнопками или одним сообщением.")
     return "\n".join(lines)
@@ -226,6 +239,13 @@ def _code_request_text(request) -> str:
 def _code_entry_text(info_text: str, code: str) -> str:
     current = code if code else "-"
     return f"{info_text}\n\nТекущий ввод: <code>{current}</code>"
+
+
+def _normalize_email(raw: str) -> str | None:
+    email = (raw or "").strip()
+    if not email or "@" not in email or "." not in email.rsplit("@", 1)[-1]:
+        return None
+    return email
 
 
 def _promote_login_session(config: Config, temp_session_path: Path, phone: str, login_id: str) -> Path:
@@ -430,11 +450,98 @@ async def add_by_code_phone(message: Message, state: FSMContext, config: Config)
         await state.clear()
         await message.answer("Сессия уже авторизована, но Telegram не вернул данные аккаунта.", reply_markup=accounts_menu())
         return
+    if code_request.delivery_type == "SentCodeTypeSetUpEmailRequired":
+        await state.set_state(AddByCode.waiting_email)
+        await message.answer(
+            "Telegram просит указать email для регистрации.\n\nОтправь email, на который придет код подтверждения."
+        )
+        return
 
     info_text = _code_request_text(code_request)
     await state.update_data(code_info_text=info_text)
     await state.set_state(AddByCode.waiting_code)
     await message.answer(_code_entry_text(info_text, ""), reply_markup=digit_code_keyboard())
+
+
+@router.message(AddByCode.waiting_email)
+async def add_by_code_email(message: Message, state: FSMContext, config: Config) -> None:
+    email = _normalize_email(message.text or "")
+    if not email:
+        await message.answer("Email выглядит некорректно. Отправь email ещё раз.")
+        return
+
+    data = await state.get_data()
+    phone_code_hash = data.get("phone_code_hash")
+    if not phone_code_hash:
+        await state.clear()
+        await message.answer("Не найден phone_code_hash. Начни регистрацию заново.", reply_markup=accounts_menu())
+        return
+
+    try:
+        email_request = await send_login_email_code(
+            Path(data["session_path"]),
+            data["phone"],
+            phone_code_hash,
+            email,
+            config.telegram_api_id,
+            config.telegram_api_hash,
+            data["runtime"],
+        )
+    except Exception as exc:
+        await message.answer(f"Не удалось отправить код на email: {exc}\nОтправь другой email или /cancel.")
+        return
+
+    await state.update_data(email=email, email_code_length=email_request.code_length)
+    await state.set_state(AddByCode.waiting_email_code)
+    await message.answer(
+        (
+            f"Код отправлен на email: <code>{escape(email_request.email_pattern)}</code>\n"
+            f"Длина кода: {email_request.code_length}\n\n"
+            "Отправь код из письма одним сообщением."
+        )
+    )
+
+
+@router.message(AddByCode.waiting_email_code)
+async def add_by_code_email_code(message: Message, state: FSMContext, config: Config) -> None:
+    email_code = _normalize_login_code(message.text or "")
+    if not email_code:
+        await message.answer("Код с email пустой. Отправь код ещё раз.")
+        return
+
+    data = await state.get_data()
+    phone_code_hash = data.get("phone_code_hash")
+    if not phone_code_hash:
+        await state.clear()
+        await message.answer("Не найден phone_code_hash. Начни регистрацию заново.", reply_markup=accounts_menu())
+        return
+
+    expected_length = data.get("email_code_length")
+    if expected_length and len(email_code) != int(expected_length):
+        await message.answer(f"Код с email должен быть длиной {expected_length}. Отправь код ещё раз.")
+        return
+
+    try:
+        code_request = await verify_login_email_code(
+            Path(data["session_path"]),
+            data["phone"],
+            phone_code_hash,
+            email_code,
+            config.telegram_api_id,
+            config.telegram_api_hash,
+            data["runtime"],
+        )
+    except Exception as exc:
+        await message.answer(f"Код с email не подошёл: {exc}\nОтправь код ещё раз или /cancel.")
+        return
+
+    await state.update_data(
+        phone_code_hash=code_request.phone_code_hash,
+        code="",
+        code_info_text=_code_request_text(code_request),
+    )
+    await state.set_state(AddByCode.waiting_code)
+    await message.answer(_code_entry_text(_code_request_text(code_request), ""), reply_markup=digit_code_keyboard())
 
 
 @router.message(AddByCode.waiting_code)
@@ -500,6 +607,20 @@ async def complete_code(message: Message, state: FSMContext, config: Config, cod
             config.telegram_api_hash,
             data["runtime"],
         )
+    except PhoneNumberUnoccupiedError:
+        try:
+            user = await sign_up_account(
+                Path(data["session_path"]),
+                data["phone"],
+                phone_code_hash,
+                config.telegram_api_id,
+                config.telegram_api_hash,
+                data["runtime"],
+            )
+        except Exception as exc:
+            await state.clear()
+            await message.answer(f"Регистрация нового аккаунта не удалась: {exc}", reply_markup=accounts_menu())
+            return
     except SessionPasswordNeededError:
         await state.update_data(code=code)
         await state.set_state(AddByCode.waiting_twofa)
