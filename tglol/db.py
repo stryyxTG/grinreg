@@ -194,7 +194,7 @@ def set_account_stage(
     registration_service: str | None = None,
     registration_services=None,
 ) -> None:
-    if account_stage not in {"nereg", "reg"}:
+    if account_stage not in {"nereg", "reg", "issued"}:
         raise ValueError("unknown account stage")
     if account_stage == "reg":
         if registration_services is None and registration_service is not None:

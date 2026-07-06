@@ -64,6 +64,26 @@ def _origin_stage(origin: str) -> str | None:
     return None
 
 
+def _origin_to_stage_filter(origin: str) -> tuple[str, str]:
+    if origin == "common":
+        return "all", "all"
+    if origin == "common_nereg":
+        return "nereg", "all"
+    if origin == "common_reg":
+        return "reg", "all"
+    if origin == "common_issued":
+        return "issued", "all"
+    parsed = parse_reg_origin(origin)
+    if parsed is None:
+        return "all", "all"
+    registration_service, excluded_service = parsed
+    if registration_service:
+        return "reg", registration_service
+    if excluded_service:
+        return "reg", f"not_{excluded_service}"
+    return "reg", "all"
+
+
 def accounts_page_keyboard(
     accounts: Sequence,
     *,
@@ -79,6 +99,17 @@ def accounts_page_keyboard(
             callback_data=f"account:open:{account.id}:{origin}:{ref_id}:{page}",
         )
 
+    if origin.startswith("common"):
+        stage, filter_value = _origin_to_stage_filter(origin)
+        builder.button(
+            text="Скачать ZIP",
+            callback_data=f"accounts:zip_common:{stage}:{filter_value}",
+        )
+        builder.button(
+            text="Удалить всё",
+            callback_data=f"accounts:delete_common_ask:{stage}:{filter_value}",
+        )
+
     pages = max(1, ceil(total / ACCOUNTS_PER_PAGE))
     nav_count = 0
     if page > 0:
@@ -91,7 +122,10 @@ def accounts_page_keyboard(
         nav_count += 1
 
     builder.button(text="Меню аккаунтов", callback_data="accounts:menu")
-    builder.adjust(*([1] * len(accounts)), nav_count, 1)
+    if origin.startswith("common"):
+        builder.adjust(*([1] * len(accounts)), 1, 1, nav_count, 1)
+    else:
+        builder.adjust(*([1] * len(accounts)), nav_count, 1)
     return builder.as_markup()
 
 
@@ -117,10 +151,13 @@ def account_detail_menu(
     return builder.as_markup()
 
 
-def common_storage_sections_menu(*, nereg_count: int, reg_count: int) -> InlineKeyboardMarkup:
-    total = nereg_count + reg_count
+def common_storage_sections_menu(*, nereg_count: int, reg_count: int, issued_count: int) -> InlineKeyboardMarkup:
+    total = nereg_count + reg_count + issued_count
     builder = InlineKeyboardBuilder()
     builder.button(text=f"Хранилище · {total}", callback_data="accounts:page:common:0:0")
+    builder.button(text=f"НЕРЕГ · {nereg_count}", callback_data="accounts:page:common_nereg:0:0")
+    builder.button(text=f"РЕГ · {reg_count}", callback_data="accounts:page:common_reg:0:0")
+    builder.button(text=f"ВЫДАННЫЕ · {issued_count}", callback_data="accounts:page:common_issued:0:0")
     builder.button(text="Назад", callback_data="accounts:menu")
     builder.adjust(1)
     return builder.as_markup()

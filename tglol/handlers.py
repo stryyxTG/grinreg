@@ -20,6 +20,7 @@ from tglol.bulk_input import parse_bulk_phone_code_input, parse_bulk_phone_input
 from tglol.config import Config
 from tglol.db import (
     add_account,
+    connect,
     count_accounts,
     count_accounts_by_stage,
     delete_account_row,
@@ -135,25 +136,41 @@ def _username(value) -> str:
     return f"<code>{escape(username)}</code>"
 
 
-def _common_account_counts(config: Config) -> tuple[int, int]:
-    total = count_accounts(config)
-    return total, 0
+def _common_account_counts(config: Config) -> tuple[int, int, int]:
+    nereg_count = count_accounts_by_stage(config, account_stage="nereg")
+    reg_count = count_accounts_by_stage(config, account_stage="reg")
+    issued_count = count_accounts_by_stage(config, account_stage="issued")
+    return nereg_count, reg_count, issued_count
 
 
 def _origin_stage(origin: str) -> str | None:
+    if origin == "common_nereg":
+        return "nereg"
+    if origin == "common_reg":
+        return "reg"
+    if origin == "common_issued":
+        return "issued"
     return None
 
 
 def _origin_service_filters(origin: str) -> tuple[str | None, str | None]:
-    return None, None
+    if origin == "common_reg":
+        return None, None
+    if origin == "common_issued":
+        return None, None
+    return parse_reg_origin(origin)
 
 
 def _origin_is_valid(origin: str) -> bool:
-    return origin in {"common", "common_nereg", "common_reg"} or parse_reg_origin(origin) is not None
+    return origin in {"common", "common_nereg", "common_reg", "common_issued"} or parse_reg_origin(origin) is not None
 
 
 def _origin_for_account(account) -> str:
-    return "common"
+    if account.account_stage == "issued":
+        return "common_issued"
+    if account.account_stage == "reg":
+        return "common_reg"
+    return "common_nereg"
 
 
 def _account_connection_params(account, config: Config) -> tuple[int, str, dict[str, str]]:
@@ -282,9 +299,16 @@ async def _notify_owners(bot: Bot, config: Config, *, reason: str, account_phone
 
 
 async def _give_out_accounts(message: Message, bot: Bot, config: Config) -> None:
+    requested = 1
+    text = (message.text or "").strip().lower()
+    match = re.search(r"\bтг\b\s*(\d+)", text)
+    if match:
+        requested = int(match.group(1))
+        requested = max(1, min(requested, 20))
+
     accounts: list = []
-    all_accounts = list_accounts_by_scope(config)
-    for account in all_accounts:
+    available_accounts = [account for account in list_accounts_by_scope(config) if account.account_stage != "issued"]
+    for account in available_accounts:
         if not account.session_path:
             continue
         session_path = Path(account.session_path)
@@ -331,12 +355,15 @@ async def _give_out_accounts(message: Message, bot: Bot, config: Config) -> None
             logger.info("Removed invalid account %s because status=%s", account.id, status)
             continue
         accounts.append(account)
-        if len(accounts) >= 3:
+        if len(accounts) >= requested:
             break
 
     if not accounts:
         await message.answer("Сейчас свободных аккаунтов нет.")
         return
+
+    for account in accounts:
+        set_account_stage(config, account.id, "issued")
 
     for account in accounts:
         keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Получить код для входа", callback_data=f"account:request_code:{account.id}:{message.chat.id}:{message.from_user.id if message.from_user else 0}")]])
@@ -415,12 +442,27 @@ async def _show_account_page(callback: CallbackQuery, config: Config, origin: st
         await callback.answer("Это хранилище больше недоступно.", show_alert=True)
         return
 
-    total = count_accounts(config)
+    stage = _origin_stage(origin)
+    registration_service, excluded_registration_service = _origin_service_filters(origin)
+
+    if stage is None:
+        total = count_accounts(config)
+    else:
+        total = count_accounts_by_stage(
+            config,
+            account_stage=stage,
+            registration_service=registration_service,
+            excluded_registration_service=excluded_registration_service,
+        )
+
     page = max(0, min(page, _pages(total) - 1))
     accounts = list_accounts(
         config,
         limit=ACCOUNTS_PER_PAGE,
         offset=page * ACCOUNTS_PER_PAGE,
+        account_stage=stage,
+        registration_service=registration_service,
+        excluded_registration_service=excluded_registration_service,
     )
 
     title = "Хранилище"
@@ -1301,20 +1343,26 @@ async def download_common_stage_zip(callback: CallbackQuery, config: Config) -> 
     parts = callback.data.split(":")
     stage = parts[2] if len(parts) > 2 else ""
     raw_filter = parts[3] if len(parts) > 3 else "all"
-    service_filter = parse_service_filter(raw_filter)
-    if stage not in {"nereg", "reg"}:
-        await callback.answer("Неизвестный раздел.", show_alert=True)
-        return
-    if service_filter is None:
-        await callback.answer("Неизвестный сервис.", show_alert=True)
-        return
-    registration_service, excluded_service = service_filter
-    accounts = list_accounts_by_scope(
-        config,
-        account_stage=stage,
-        registration_service=registration_service,
-        excluded_registration_service=excluded_service,
-    )
+    if stage == "all":
+        if raw_filter != "all":
+            await callback.answer("Фильтр недоступен для всех аккаунтов.", show_alert=True)
+            return
+        accounts = list_accounts_by_scope(config)
+    else:
+        service_filter = parse_service_filter(raw_filter)
+        if stage not in {"nereg", "reg"}:
+            await callback.answer("Неизвестный раздел.", show_alert=True)
+            return
+        if service_filter is None:
+            await callback.answer("Неизвестный сервис.", show_alert=True)
+            return
+        registration_service, excluded_service = service_filter
+        accounts = list_accounts_by_scope(
+            config,
+            account_stage=stage,
+            registration_service=registration_service,
+            excluded_registration_service=excluded_service,
+        )
     if not accounts:
         await callback.answer("В этом разделе нет аккаунтов.", show_alert=True)
         return
@@ -1384,20 +1432,26 @@ async def ask_delete_common_stage(callback: CallbackQuery, config: Config) -> No
     parts = callback.data.split(":")
     stage = parts[2] if len(parts) > 2 else ""
     raw_filter = parts[3] if len(parts) > 3 else "all"
-    service_filter = parse_service_filter(raw_filter)
-    if stage not in {"nereg", "reg"}:
-        await callback.answer("Неизвестный раздел.", show_alert=True)
-        return
-    if service_filter is None:
-        await callback.answer("Неизвестный сервис.", show_alert=True)
-        return
-    registration_service, excluded_service = service_filter
-    total = count_accounts_by_stage(
-        config,
-        account_stage=stage,
-        registration_service=registration_service,
-        excluded_registration_service=excluded_service,
-    )
+    if stage == "all":
+        if raw_filter != "all":
+            await callback.answer("Фильтр недоступен для всех аккаунтов.", show_alert=True)
+            return
+        total = count_accounts(config)
+    else:
+        service_filter = parse_service_filter(raw_filter)
+        if stage not in {"nereg", "reg"}:
+            await callback.answer("Неизвестный раздел.", show_alert=True)
+            return
+        if service_filter is None:
+            await callback.answer("Неизвестный сервис.", show_alert=True)
+            return
+        registration_service, excluded_service = service_filter
+        total = count_accounts_by_stage(
+            config,
+            account_stage=stage,
+            registration_service=registration_service,
+            excluded_registration_service=excluded_service,
+        )
     if not total:
         await callback.answer("В этом разделе нет аккаунтов.", show_alert=True)
         return
@@ -1416,30 +1470,44 @@ async def confirm_delete_common_stage(callback: CallbackQuery, config: Config) -
     parts = callback.data.split(":")
     stage = parts[2] if len(parts) > 2 else ""
     raw_filter = parts[3] if len(parts) > 3 else "all"
-    service_filter = parse_service_filter(raw_filter)
-    if stage not in {"nereg", "reg"}:
-        await callback.answer("Неизвестный раздел.", show_alert=True)
-        return
-    if service_filter is None:
-        await callback.answer("Неизвестный сервис.", show_alert=True)
-        return
-    registration_service, excluded_service = service_filter
-    accounts = list_accounts_by_scope(
-        config,
-        account_stage=stage,
-        registration_service=registration_service,
-        excluded_registration_service=excluded_service,
-    )
-    if not accounts:
-        await callback.answer("В этом разделе нет аккаунтов.", show_alert=True)
-        return
-    removed_files = _delete_local_account_files(config, accounts)
-    removed_rows = delete_accounts_by_stage(
-        config,
-        account_stage=stage,
-        registration_service=registration_service,
-        excluded_registration_service=excluded_service,
-    )
+    if stage == "all":
+        if raw_filter != "all":
+            await callback.answer("Фильтр недоступен для всех аккаунтов.", show_alert=True)
+            return
+        accounts = list_accounts_by_scope(config)
+        if not accounts:
+            await callback.answer("В хранилище нет аккаунтов.", show_alert=True)
+            return
+        removed_files = _delete_local_account_files(config, accounts)
+        removed_rows = 0
+        with connect(config) as connection:
+            cursor = connection.execute("DELETE FROM accounts")
+            removed_rows = int(cursor.rowcount or 0)
+    else:
+        service_filter = parse_service_filter(raw_filter)
+        if stage not in {"nereg", "reg"}:
+            await callback.answer("Неизвестный раздел.", show_alert=True)
+            return
+        if service_filter is None:
+            await callback.answer("Неизвестный сервис.", show_alert=True)
+            return
+        registration_service, excluded_service = service_filter
+        accounts = list_accounts_by_scope(
+            config,
+            account_stage=stage,
+            registration_service=registration_service,
+            excluded_registration_service=excluded_service,
+        )
+        if not accounts:
+            await callback.answer("В этом разделе нет аккаунтов.", show_alert=True)
+            return
+        removed_files = _delete_local_account_files(config, accounts)
+        removed_rows = delete_accounts_by_stage(
+            config,
+            account_stage=stage,
+            registration_service=registration_service,
+            excluded_registration_service=excluded_service,
+        )
     nereg_count, reg_count = _common_account_counts(config)
     await callback.message.edit_text(
         (
