@@ -231,6 +231,9 @@ def _code_request_text(request) -> str:
     if request.delivery_type == "SentCodeTypeSetUpEmailRequired":
         lines.append("")
         lines.append("Telegram просит привязать email перед продолжением регистрации.")
+    elif request.delivery_type == "SentCodeTypeApp":
+        lines.append("")
+        lines.append("Telegram отправил код в приложение аккаунта. Email здесь не принимается API.")
     lines.append("")
     lines.append("Введите код кнопками или одним сообщением.")
     return "\n".join(lines)
@@ -457,7 +460,7 @@ async def add_by_code_phone(message: Message, state: FSMContext, config: Config)
         await state.clear()
         await message.answer("Сессия уже авторизована, но Telegram не вернул данные аккаунта.", reply_markup=accounts_menu())
         return
-    if code_request.delivery_type in {"SentCodeTypeSetUpEmailRequired", "SentCodeTypeApp"}:
+    if code_request.delivery_type == "SentCodeTypeSetUpEmailRequired":
         await state.set_state(AddByCode.waiting_email)
         await message.answer(
             (
@@ -560,10 +563,6 @@ async def add_by_code_email_code(message: Message, state: FSMContext, config: Co
 
 @router.message(AddByCode.waiting_code)
 async def add_by_code_message_code(message: Message, state: FSMContext, config: Config) -> None:
-    email = _normalize_email(message.text or "")
-    if email:
-        await _start_email_setup(message, state, config, email)
-        return
     await complete_code(message, state, config, _normalize_login_code(message.text or ""))
 
 
