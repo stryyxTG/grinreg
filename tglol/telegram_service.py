@@ -60,6 +60,8 @@ async def send_code(
     api_id: int,
     api_hash: str,
     runtime: dict[str, str],
+    *,
+    unknown_number: bool = False,
 ) -> CodeRequest:
     client = client_for(session_path, api_id, api_hash, runtime)
     await client.connect()
@@ -77,7 +79,14 @@ async def send_code(
                 user=me,
             )
 
-        sent = await client.send_code_request(phone)
+        sent = await client(
+            functions.auth.SendCodeRequest(
+                phone_number=phone,
+                api_id=api_id,
+                api_hash=api_hash,
+                settings=types.CodeSettings(unknown_number=unknown_number),
+            )
+        )
         logger.info(
             "Telegram login code requested: phone=%s delivery=%s next=%s timeout=%s length=%s",
             phone,

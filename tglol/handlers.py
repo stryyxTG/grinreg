@@ -231,9 +231,6 @@ def _code_request_text(request) -> str:
     if request.delivery_type == "SentCodeTypeSetUpEmailRequired":
         lines.append("")
         lines.append("Telegram просит привязать email перед продолжением регистрации.")
-    elif request.delivery_type == "SentCodeTypeApp":
-        lines.append("")
-        lines.append("Если Telegram на телефоне просит email вместо кода, отправь email сюда.")
     lines.append("")
     lines.append("Введите код кнопками или одним сообщением.")
     return "\n".join(lines)
@@ -430,7 +427,14 @@ async def add_by_code_phone(message: Message, state: FSMContext, config: Config)
     phone_digits = phone.lstrip("+")
     session_path = unique_path(config.temp_dir, f"temp_session_{admin_id}_{phone_digits}_{login_id}.session")
     try:
-        code_request = await send_code(session_path, phone, config.telegram_api_id, config.telegram_api_hash, runtime)
+        code_request = await send_code(
+            session_path,
+            phone,
+            config.telegram_api_id,
+            config.telegram_api_hash,
+            runtime,
+            unknown_number=True,
+        )
     except Exception as exc:
         await state.clear()
         await message.answer(f"Не удалось отправить код Telegram: {exc}", reply_markup=accounts_menu())
@@ -452,6 +456,17 @@ async def add_by_code_phone(message: Message, state: FSMContext, config: Config)
     if code_request.already_authorized:
         await state.clear()
         await message.answer("Сессия уже авторизована, но Telegram не вернул данные аккаунта.", reply_markup=accounts_menu())
+        return
+    if code_request.delivery_type == "SentCodeTypeApp":
+        await state.clear()
+        await message.answer(
+            (
+                "Telegram отправил код в уже существующее приложение аккаунта.\n\n"
+                "Для авторегистрации это значит, что номер не чистый или уже занят. "
+                "Возьми другой номер."
+            ),
+            reply_markup=accounts_menu(),
+        )
         return
     if code_request.delivery_type == "SentCodeTypeSetUpEmailRequired":
         await state.set_state(AddByCode.waiting_email)
