@@ -154,9 +154,7 @@ def _origin_stage(origin: str) -> str | None:
 
 
 def _origin_service_filters(origin: str) -> tuple[str | None, str | None]:
-    if origin == "common_reg":
-        return None, None
-    if origin == "common_issued":
+    if origin in {"common", "common_nereg", "common_reg", "common_issued"}:
         return None, None
     return parse_reg_origin(origin)
 
