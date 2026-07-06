@@ -26,8 +26,9 @@ def digit_code_keyboard() -> InlineKeyboardMarkup:
     builder.button(text="0", callback_data="code:digit:0")
     builder.button(text="Стереть", callback_data="code:backspace")
     builder.button(text="Подтвердить", callback_data="code:done")
+    builder.button(text="Другой способ", callback_data="code:resend")
     builder.button(text="Отмена", callback_data="accounts:menu")
-    builder.adjust(3, 3, 3, 3, 1, 1)
+    builder.adjust(3, 3, 3, 3, 1, 1, 1)
     return builder.as_markup()
 
 

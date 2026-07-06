@@ -106,6 +106,31 @@ async def send_code(
         await client.disconnect()
 
 
+async def resend_code(
+    session_path: Path,
+    phone: str,
+    phone_code_hash: str,
+    api_id: int,
+    api_hash: str,
+    runtime: dict[str, str],
+) -> CodeRequest:
+    client = client_for(session_path, api_id, api_hash, runtime)
+    await client.connect()
+    try:
+        sent = await client(functions.auth.ResendCodeRequest(phone, phone_code_hash))
+        logger.info(
+            "Telegram login code resent: phone=%s delivery=%s next=%s timeout=%s length=%s",
+            phone,
+            type(sent.type).__name__,
+            type(sent.next_type).__name__ if sent.next_type else None,
+            sent.timeout,
+            getattr(sent.type, "length", None),
+        )
+        return code_request_from_sent_code(sent)
+    finally:
+        await client.disconnect()
+
+
 def code_request_from_sent_code(sent) -> CodeRequest:
     return CodeRequest(
         phone_code_hash=sent.phone_code_hash,
