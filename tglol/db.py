@@ -5,7 +5,6 @@ import sqlite3
 from typing import Any
 
 from tglol.config import Config
-from tglol.registration import services_to_storage
 
 
 SCHEMA = """
@@ -22,9 +21,7 @@ CREATE TABLE IF NOT EXISTS accounts (
     json_source TEXT NOT NULL,
     twofa_password TEXT,
     source_type TEXT NOT NULL,
-    account_stage TEXT NOT NULL DEFAULT 'nereg',
-    registration_service TEXT,
-    registration_services TEXT,
+    account_stage TEXT NOT NULL DEFAULT 'storage',
     status TEXT NOT NULL,
     created_by INTEGER,
     created_at TEXT NOT NULL,
@@ -48,8 +45,6 @@ class Account:
     twofa_password: str | None
     source_type: str
     account_stage: str
-    registration_service: str | None
-    registration_services: str | None
     status: str
     created_by: int | None
     created_at: str
@@ -65,18 +60,7 @@ def connect(config: Config) -> sqlite3.Connection:
 def init_db(config: Config) -> None:
     with connect(config) as connection:
         connection.executescript(SCHEMA)
-        _ensure_column(connection, "accounts", "account_stage", "TEXT NOT NULL DEFAULT 'nereg'")
-        _ensure_column(connection, "accounts", "registration_service", "TEXT")
-        _ensure_column(connection, "accounts", "registration_services", "TEXT")
-        connection.execute(
-            """
-            UPDATE accounts
-            SET registration_services = registration_service
-            WHERE registration_services IS NULL
-              AND registration_service IS NOT NULL
-              AND registration_service != ''
-            """
-        )
+        _ensure_column(connection, "accounts", "account_stage", "TEXT NOT NULL DEFAULT 'storage'")
 
 
 def _table_columns(connection: sqlite3.Connection, table: str) -> set[str]:
@@ -111,8 +95,6 @@ def list_accounts(
     offset: int = 0,
     account_stage: str | None = None,
     excluded_account_stage: str | None = None,
-    registration_service: str | None = None,
-    excluded_registration_service: str | None = None,
 ) -> list[Account]:
     clauses: list[str] = []
     params: list[Any] = []
@@ -122,12 +104,6 @@ def list_accounts(
     if excluded_account_stage is not None:
         clauses.append("account_stage != ?")
         params.append(excluded_account_stage)
-    if registration_service is not None:
-        clauses.append("instr(',' || coalesce(nullif(registration_services, ''), registration_service, '') || ',', ?) > 0")
-        params.append(f",{registration_service},")
-    if excluded_registration_service is not None:
-        clauses.append("instr(',' || coalesce(nullif(registration_services, ''), registration_service, '') || ',', ?) = 0")
-        params.append(f",{excluded_registration_service},")
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
 
     with connect(config) as connection:
@@ -138,21 +114,8 @@ def list_accounts(
     return [_account_from_row(row) for row in rows]
 
 
-def list_accounts_by_scope(
-    config: Config,
-    *,
-    account_stage: str | None = None,
-    registration_service: str | None = None,
-    excluded_registration_service: str | None = None,
-) -> list[Account]:
-    return list_accounts(
-        config,
-        limit=100000,
-        offset=0,
-        account_stage=account_stage,
-        registration_service=registration_service,
-        excluded_registration_service=excluded_registration_service,
-    )
+def list_accounts_by_scope(config: Config, *, account_stage: str | None = None) -> list[Account]:
+    return list_accounts(config, limit=100000, offset=0, account_stage=account_stage)
 
 
 def get_account(config: Config, account_id: int) -> Account | None:
@@ -172,8 +135,6 @@ def count_accounts_by_stage(
     config: Config,
     account_stage: str | None = None,
     excluded_account_stage: str | None = None,
-    registration_service: str | None = None,
-    excluded_registration_service: str | None = None,
 ) -> int:
     clauses: list[str] = []
     params: list[Any] = []
@@ -183,49 +144,10 @@ def count_accounts_by_stage(
     if excluded_account_stage is not None:
         clauses.append("account_stage != ?")
         params.append(excluded_account_stage)
-    if registration_service is not None:
-        clauses.append("instr(',' || coalesce(nullif(registration_services, ''), registration_service, '') || ',', ?) > 0")
-        params.append(f",{registration_service},")
-    if excluded_registration_service is not None:
-        clauses.append("instr(',' || coalesce(nullif(registration_services, ''), registration_service, '') || ',', ?) = 0")
-        params.append(f",{excluded_registration_service},")
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
 
     with connect(config) as connection:
         return int(connection.execute(f"SELECT COUNT(*) FROM accounts {where}", params).fetchone()[0])
-
-
-def set_account_stage(
-    config: Config,
-    account_id: int,
-    account_stage: str,
-    registration_service: str | None = None,
-    registration_services=None,
-) -> None:
-    if account_stage not in {"nereg", "reg", "issued"}:
-        raise ValueError("unknown account stage")
-    if account_stage == "reg":
-        if registration_services is None and registration_service is not None:
-            registration_services = (registration_service,)
-        stored_services = services_to_storage(registration_services)
-        if not stored_services:
-            raise ValueError("unknown registration service")
-        first_service = stored_services.split(",", 1)[0]
-    else:
-        stored_services = None
-        first_service = None
-    with connect(config) as connection:
-        connection.execute(
-            """
-            UPDATE accounts
-            SET account_stage = ?,
-                registration_service = ?,
-                registration_services = ?,
-                updated_at = datetime('now')
-            WHERE id = ?
-            """,
-            (account_stage, first_service, stored_services, account_id),
-        )
 
 
 def update_account_status(config: Config, account_id: int, status: str) -> None:
@@ -241,33 +163,7 @@ def delete_account_row(config: Config, account_id: int) -> None:
         connection.execute("DELETE FROM accounts WHERE id = ?", (account_id,))
 
 
-def delete_accounts_by_stage(
-    config: Config,
-    *,
-    account_stage: str | None = None,
-    excluded_account_stage: str | None = None,
-    registration_service: str | None = None,
-    excluded_registration_service: str | None = None,
-) -> int:
-    clauses: list[str] = []
-    params: list[Any] = []
-    if account_stage is not None:
-        if account_stage not in {"nereg", "reg", "issued"}:
-            raise ValueError("unknown account stage")
-        clauses.append("account_stage = ?")
-        params.append(account_stage)
-    if excluded_account_stage is not None:
-        clauses.append("account_stage != ?")
-        params.append(excluded_account_stage)
-    if registration_service is not None:
-        clauses.append("instr(',' || coalesce(nullif(registration_services, ''), registration_service, '') || ',', ?) > 0")
-        params.append(f",{registration_service},")
-    if excluded_registration_service is not None:
-        clauses.append("instr(',' || coalesce(nullif(registration_services, ''), registration_service, '') || ',', ?) = 0")
-        params.append(f",{excluded_registration_service},")
+def delete_all_accounts(config: Config) -> int:
     with connect(config) as connection:
-        cursor = connection.execute(
-            f"DELETE FROM accounts WHERE {' AND '.join(clauses)}",
-            params,
-        )
+        cursor = connection.execute("DELETE FROM accounts")
         return int(cursor.rowcount or 0)

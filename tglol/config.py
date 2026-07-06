@@ -21,7 +21,6 @@ class Config:
     default_lang_code: str
     default_system_lang_code: str
     default_lang_pack: str
-    trigger_chat_id: int | None
 
 
 def _get_required(name: str) -> str:
@@ -52,13 +51,6 @@ def _get_owner_ids() -> frozenset[int]:
     return _parse_admin_ids(_get_required("ADMIN_IDS"), source="ADMIN_IDS")
 
 
-def _get_optional_int(name: str) -> int | None:
-    raw = os.getenv(name, "").strip()
-    if not raw:
-        return None
-    return int(raw)
-
-
 def load_config() -> Config:
     load_dotenv()
 
@@ -76,6 +68,5 @@ def load_config() -> Config:
         db_path=Path(os.getenv("DB_PATH", data_dir / "bot.sqlite3")),
         default_lang_code=os.getenv("DEFAULT_LANG_CODE", "en"),
         default_system_lang_code=os.getenv("DEFAULT_SYSTEM_LANG_CODE", "en-US"),
-        default_lang_pack=os.getenv("DEFAULT_LANG_PACK", "tdesktop"),
-        trigger_chat_id=_get_optional_int("TRIGGER_CHAT_ID"),
+        default_lang_pack=os.getenv("DEFAULT_LANG_PACK", "ios"),
     )

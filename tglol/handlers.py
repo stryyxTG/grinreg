@@ -7,68 +7,41 @@ import logging
 import re
 import secrets
 import shutil
-import time
 import zipfile
 
-from aiogram import BaseMiddleware, Bot, F, Router
+from aiogram import BaseMiddleware, F, Router
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, FSInputFile, InlineKeyboardButton, InlineKeyboardMarkup, Message, TelegramObject
+from aiogram.types import CallbackQuery, FSInputFile, Message, TelegramObject
 from telethon.errors import SessionPasswordNeededError
 
-from tglol.bulk_input import parse_bulk_phone_code_input, parse_bulk_phone_input
 from tglol.config import Config
 from tglol.db import (
     add_account,
-    connect,
     count_accounts,
-    count_accounts_by_stage,
     delete_account_row,
-    delete_accounts_by_stage,
+    delete_all_accounts,
     get_account,
     list_accounts,
     list_accounts_by_scope,
-    set_account_stage,
     update_account_status,
 )
-from tglol.desktop_profile import generated_account_json, random_desktop_runtime, utc_now_iso
-from tglol.importer import download_document, import_zip
+from tglol.desktop_profile import generated_account_json, random_iphone_runtime, utc_now_iso
 from tglol.json_utils import load_json, pick_api, runtime_from_json, write_json
 from tglol.keyboards import (
     ACCOUNTS_PER_PAGE,
     account_detail_menu,
     accounts_menu,
     accounts_page_keyboard,
-    add_account_menu,
-    common_storage_sections_menu,
     confirm_check_account_menu,
-    confirm_account_stage_menu,
     confirm_delete_account_menu,
-    confirm_delete_common_stage_menu,
+    confirm_delete_all_accounts_menu,
     digit_code_keyboard,
-    registration_filter_menu,
-    registration_service_menu,
 )
 from tglol.paths import unique_path
-from tglol.registration import (
-    is_registration_service,
-    parse_reg_origin,
-    parse_service_filter,
-    service_filter_label,
-    service_label,
-    services_from_storage,
-    services_label,
-)
-from tglol.states import AddByBulkCode, AddByCode, AddByZip
-from tglol.telegram_service import (
-    get_latest_telegram_code,
-    get_latest_verification_code,
-    inspect_session,
-    send_code,
-    sign_in_code,
-    sign_in_password,
-    user_fields,
-)
+from tglol.states import AddByCode
+from tglol.telegram_service import inspect_session, send_code, sign_in_code, sign_in_password, user_fields
+
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -78,36 +51,12 @@ class AccessMiddleware(BaseMiddleware):
     async def __call__(self, handler, event: TelegramObject, data: dict):
         config: Config = data["config"]
         user = data.get("event_from_user")
-
-        if isinstance(event, Message):
-            chat_id = event.chat.id
-            text = (event.text or "").strip()
-        elif isinstance(event, CallbackQuery):
-            chat_id = event.message.chat.id if event.message else None
-            text = ""
-        else:
-            chat_id = None
-            text = ""
-
         if not user:
             return None
-
-        is_admin = user.id in config.admin_ids
-        is_trigger_chat = bool(config.trigger_chat_id and chat_id is not None and chat_id == config.trigger_chat_id)
-        is_start_command = bool(text == "/start")
-
-        if is_admin:
+        if user.id in config.admin_ids:
             return await handler(event, data)
-
-        if not config.trigger_chat_id:
-            return await handler(event, data)
-
-        if is_trigger_chat:
-            return await handler(event, data)
-
-        if is_start_command:
-            return await handler(event, data)
-
+        if isinstance(event, Message) and (event.text or "").strip() == "/start":
+            await event.answer("Нет доступа.")
         return None
 
 
@@ -136,59 +85,8 @@ def _username(value) -> str:
     return f"<code>{escape(username)}</code>"
 
 
-def _common_account_counts(config: Config) -> tuple[int, int]:
-    clean_count = count_accounts_by_stage(config, excluded_account_stage="issued")
-    issued_count = count_accounts_by_stage(config, account_stage="issued")
-    return clean_count, issued_count
-
-
-def _origin_stage(origin: str) -> str | None:
-    if origin in {"common", "common_clean"}:
-        return "clean"
-    if origin == "common_issued":
-        return "issued"
-    return None
-
-
-def _origin_service_filters(origin: str) -> tuple[str | None, str | None]:
-    return None, None
-
-
 def _origin_is_valid(origin: str) -> bool:
-    return origin in {"common", "common_clean", "common_issued"}
-
-
-def _origin_for_account(account) -> str:
-    if account.account_stage == "issued":
-        return "common_issued"
-    return "common"
-
-
-def _stage_title(stage: str) -> str:
-    if stage == "clean":
-        return "Чистые"
-    if stage == "issued":
-        return "Выданные"
-    if stage == "all":
-        return "Все аккаунты"
-    return "Неизвестный раздел"
-
-
-def _stage_filter_title(
-    stage: str,
-    registration_service: str | None = None,
-    excluded_service: str | None = None,
-) -> str:
-    if stage == "all":
-        return "Все аккаунты"
-    if stage == "clean":
-        return _stage_title(stage)
-    if stage == "issued":
-        return _stage_title(stage)
-    filter_label = service_filter_label(registration_service, excluded_service)
-    if filter_label == "Все":
-        return _stage_title(stage)
-    return f"{_stage_title(stage)} {filter_label}"
+    return origin == "storage"
 
 
 def _account_connection_params(account, config: Config) -> tuple[int, str, dict[str, str]]:
@@ -255,8 +153,8 @@ def _delete_local_account_files(config: Config, accounts: list) -> int:
     return removed
 
 
-def _make_accounts_zip(config: Config, accounts: list, stage: str) -> tuple[Path, int]:
-    zip_path = unique_path(config.temp_dir, f"accounts_{stage}_{secrets.token_hex(4)}.zip")
+def _make_accounts_zip(config: Config, accounts: list) -> tuple[Path, int]:
+    zip_path = unique_path(config.temp_dir, f"accounts_{secrets.token_hex(4)}.zip")
     files_count = 0
     with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         archive_names: set[str] = set()
@@ -290,107 +188,6 @@ def _normalize_login_phone(raw: str) -> str | None:
     return f"+{digits}"
 
 
-def _is_trigger_message(message: Message, config: Config) -> bool:
-    if not config.trigger_chat_id:
-        return False
-    if message.chat.id != config.trigger_chat_id:
-        return False
-    text = (message.text or "").strip()
-    if not text:
-        return False
-    return bool(re.search(r"\bтг\b", text, flags=re.IGNORECASE))
-
-
-async def _notify_owners(bot: Bot, config: Config, *, reason: str, account_phone: str | None, requester_chat_id: int | None, requester_user_id: int | None) -> None:
-    text = (
-        f"<b>Аккаунт удалён по триггеру</b>\n"
-        f"Причина: {escape(reason)}\n"
-        f"Номер: {escape(account_phone or '-')}\n"
-        f"Чат: {requester_chat_id or '-'}\n"
-        f"Пользователь: {requester_user_id or '-'}"
-    )
-    for owner_id in sorted(config.admin_ids):
-        try:
-            await bot.send_message(owner_id, text, parse_mode="HTML")
-        except Exception as exc:
-            logger.warning("Cannot notify owner %s: %s", owner_id, exc)
-
-
-async def _give_out_accounts(message: Message, bot: Bot, config: Config) -> None:
-    requested = 1
-    text = (message.text or "").strip().lower()
-    match = re.search(r"\bтг\b\s*(\d+)", text)
-    if match:
-        requested = int(match.group(1))
-        requested = max(1, min(requested, 20))
-
-    accounts: list = []
-    available_accounts = [account for account in list_accounts_by_scope(config) if account.account_stage != "issued"]
-    for account in available_accounts:
-        if not account.session_path:
-            continue
-        session_path = Path(account.session_path)
-        if not session_path.exists():
-            removed_files = _delete_local_account_files(config, [account])
-            delete_account_row(config, account.id)
-            await _notify_owners(
-                bot,
-                config,
-                reason="session file missing",
-                account_phone=account.phone,
-                requester_chat_id=message.chat.id,
-                requester_user_id=message.from_user.id if message.from_user else None,
-            )
-            logger.info("Removed invalid account %s because session file missing", account.id)
-            continue
-        try:
-            api_id, api_hash, runtime = _account_connection_params(account, config)
-            status, _, _ = await inspect_session(session_path, api_id, api_hash, runtime)
-        except Exception as exc:
-            removed_files = _delete_local_account_files(config, [account])
-            delete_account_row(config, account.id)
-            await _notify_owners(
-                bot,
-                config,
-                reason=f"inspect error: {exc}",
-                account_phone=account.phone,
-                requester_chat_id=message.chat.id,
-                requester_user_id=message.from_user.id if message.from_user else None,
-            )
-            logger.info("Removed invalid account %s because inspect error: %s", account.id, exc)
-            continue
-        if status != "active":
-            removed_files = _delete_local_account_files(config, [account])
-            delete_account_row(config, account.id)
-            await _notify_owners(
-                bot,
-                config,
-                reason=f"invalid status: {status}",
-                account_phone=account.phone,
-                requester_chat_id=message.chat.id,
-                requester_user_id=message.from_user.id if message.from_user else None,
-            )
-            logger.info("Removed invalid account %s because status=%s", account.id, status)
-            continue
-        accounts.append(account)
-        if len(accounts) >= requested:
-            break
-
-    if not accounts:
-        await message.answer("Сейчас свободных аккаунтов нет.")
-        return
-
-    for account in accounts:
-        set_account_stage(config, account.id, "issued")
-
-    for account in accounts:
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Получить код для входа", callback_data=f"account:request_code:{account.id}:{message.chat.id}:{message.from_user.id if message.from_user else 0}")]])
-        await message.answer(
-            f"Аккаунт для входа\nНомер: {account.phone or '-'}\nID: {account.id}",
-            reply_markup=keyboard,
-        )
-
-
 def _delivery_type_label(raw_type: str | None) -> str:
     labels = {
         "Authorized": "сессия уже авторизована",
@@ -421,18 +218,6 @@ def _code_request_text(request) -> str:
         lines.append(f"Следующий способ: {_delivery_type_label(request.next_type)}")
     if request.timeout:
         lines.append(f"Повторный запрос будет доступен примерно через {request.timeout} сек.")
-        lines.append("Не жми повторный запрос без необходимости: Telegram может сменить доставку на звонок/SMS.")
-    if request.delivery_type == "SentCodeTypeApp":
-        lines.append("")
-        lines.append("Важно: это НЕ SMS. Код должен прийти в уже активную сессию этого аккаунта.")
-        lines.append("Если активной сессии нет под рукой, бот не сможет сам вытащить этот первый код: Telegram не отдает его через API до входа.")
-    elif request.delivery_type in {"SentCodeTypeSms", "CodeTypeSms", "CodeTypeFragmentSms"}:
-        lines.append("")
-        lines.append("Это SMS/Fragment-доставка. Код нужно смотреть не в Telegram-чате, а в SMS/Fragment.")
-    elif request.delivery_type in {"SentCodeTypeCall", "SentCodeTypeMissedCall", "CodeTypeCall", "CodeTypeMissedCall"}:
-        lines.append("")
-        lines.append("Telegram сам выбрал доставку звонком. Это бывает и у уже существующих аккаунтов.")
-        lines.append("Код нужно брать из звонка/последних цифр номера.")
     lines.append("")
     lines.append("Введите код кнопками или одним сообщением.")
     return "\n".join(lines)
@@ -455,47 +240,15 @@ def _promote_login_session(config: Config, temp_session_path: Path, phone: str, 
     return final_path
 
 
-async def _show_account_page(callback: CallbackQuery, config: Config, origin: str, ref_id: int, page: int) -> None:
-    if not _origin_is_valid(origin):
-        await callback.answer("Это хранилище больше недоступно.", show_alert=True)
-        return
-
-    stage = _origin_stage(origin)
-
-    if stage is None:
-        total = count_accounts(config)
-    elif stage == "clean":
-        total = count_accounts_by_stage(config, excluded_account_stage="issued")
-    else:
-        total = count_accounts_by_stage(config, account_stage=stage)
-
+async def _show_storage_page(callback: CallbackQuery, config: Config, ref_id: int, page: int) -> None:
+    total = count_accounts(config)
     page = max(0, min(page, _pages(total) - 1))
-    if stage == "clean":
-        accounts = list_accounts(
-            config,
-            limit=ACCOUNTS_PER_PAGE,
-            offset=page * ACCOUNTS_PER_PAGE,
-            excluded_account_stage="issued",
-        )
-    elif stage is None:
-        accounts = list_accounts(
-            config,
-            limit=ACCOUNTS_PER_PAGE,
-            offset=page * ACCOUNTS_PER_PAGE,
-        )
-    else:
-        accounts = list_accounts(
-            config,
-            limit=ACCOUNTS_PER_PAGE,
-            offset=page * ACCOUNTS_PER_PAGE,
-            account_stage=stage,
-        )
+    accounts = list_accounts(config, limit=ACCOUNTS_PER_PAGE, offset=page * ACCOUNTS_PER_PAGE)
 
-    title = "Хранилище"
     if total == 0:
-        text = f"{title}\n\nАккаунтов пока нет."
+        text = "Хранилище\n\nАккаунтов пока нет."
     else:
-        text = f"{title}\n\nВсего: {total}\nСтраница: {page + 1}/{_pages(total)}"
+        text = f"Хранилище\n\nВсего: {total}\nСтраница: {page + 1}/{_pages(total)}"
 
     await callback.message.edit_text(
         text,
@@ -503,7 +256,7 @@ async def _show_account_page(callback: CallbackQuery, config: Config, origin: st
             accounts,
             total=total,
             page=page,
-            origin=origin,
+            origin="storage",
             ref_id=ref_id,
         ),
     )
@@ -511,12 +264,8 @@ async def _show_account_page(callback: CallbackQuery, config: Config, origin: st
 
 
 def _account_detail_text(account) -> str:
-    full_name = " ".join(
-        part for part in (account.first_name, account.last_name)
-        if part not in (None, "")
-    ).strip()
+    full_name = " ".join(part for part in (account.first_name, account.last_name) if part not in (None, "")).strip()
     full_name = full_name or "-"
-
     return (
         f"<b>Аккаунт #{account.id}</b>\n"
         f"Статус: <code>{_text(account.status)}</code>\n\n"
@@ -527,11 +276,6 @@ def _account_detail_text(account) -> str:
         f"JSON: {_text(account.json_source)}\n"
         f"Источник: {_text(account.source_type)}"
     )
-
-
-def _service_selection_text(selected_services: list[str]) -> str:
-    selected = ", ".join(service_label(service) for service in selected_services) if selected_services else "не выбрано"
-    return f"Выбери один или несколько сервисов, где аккаунт зареган:\n\nВыбрано: {selected}"
 
 
 async def finalize_code_login(
@@ -572,12 +316,7 @@ async def _finalize_code_login_impl(
     clear_state: bool,
     state: FSMContext | None = None,
 ) -> None:
-    session_path = _promote_login_session(
-        config,
-        Path(session_path),
-        phone,
-        login_id,
-    )
+    session_path = _promote_login_session(config, Path(session_path), phone, login_id)
     fields = user_fields(user)
     json_path = unique_path(config.json_dir, session_path.with_suffix(".json").name)
     generated = generated_account_json(
@@ -617,11 +356,7 @@ async def _finalize_code_login_impl(
     if clear_state and state is not None:
         await state.clear()
     await message.answer(
-        (
-            f"Аккаунт добавлен в общее хранилище.\n"
-            f"ID: {account_id}\n"
-            f"Телефон: {fields['phone'] or '-'}"
-        ),
+        f"Аккаунт добавлен в хранилище.\nID: {account_id}\nТелефон: {fields['phone'] or '-'}",
         reply_markup=accounts_menu(),
     )
 
@@ -644,195 +379,19 @@ async def show_accounts_menu(callback: CallbackQuery, state: FSMContext) -> None
     await callback.answer()
 
 
-@router.callback_query(F.data == "accounts:common_sections")
-async def show_common_account_sections(callback: CallbackQuery, config: Config) -> None:
-    clean_count, issued_count = _common_account_counts(config)
-    await callback.message.edit_text(
-        "Хранилище",
-        reply_markup=common_storage_sections_menu(clean_count=clean_count, issued_count=issued_count),
-    )
-    await callback.answer()
-
-
-@router.callback_query(F.data == "accounts:add")
-async def show_add_account_menu(callback: CallbackQuery, state: FSMContext) -> None:
+@router.message(F.text == "/cancel")
+async def cancel(message: Message, state: FSMContext) -> None:
     await state.clear()
-    await callback.message.edit_text(
-        "Все новые аккаунты попадут в общее хранилище.\n\nВыбери способ добавления аккаунта.",
-        reply_markup=add_account_menu(),
-    )
-    await callback.answer()
+    await message.answer("Отменено.", reply_markup=accounts_menu())
 
 
-@router.callback_query(F.data == "accounts:add:code")
+@router.callback_query(F.data == "accounts:register")
 async def add_by_code_start(callback: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(AddByCode.waiting_phone)
     await callback.message.edit_text(
         "Отправь номер телефона.\n\nМожно с плюсом или без него, например:\n+15074486037\n15074486037"
     )
     await callback.answer()
-
-
-@router.callback_query(F.data == "accounts:add:bulk_code")
-async def add_bulk_code_start(callback: CallbackQuery, state: FSMContext) -> None:
-    await state.set_state(AddByBulkCode.waiting_phones)
-    await callback.message.edit_text(
-        "Отправь номера массово.\n\nФормат:\nномер1\nномер2\nномер3"
-    )
-    await callback.answer()
-
-
-@router.message(AddByBulkCode.waiting_phones)
-async def add_bulk_code_input(message: Message, state: FSMContext, config: Config) -> None:
-    text = message.text or ""
-    full_pairs = parse_bulk_phone_code_input(text)
-    if full_pairs:
-        await _process_bulk_phone_code_pairs(message, state, config, full_pairs)
-        return
-
-    phones = parse_bulk_phone_input(text)
-    if not phones:
-        await message.answer(
-            "Не удалось прочитать список номеров. Отправь телефоны без кодов, например:\n+79261234567\n+79261234568"
-        )
-        return
-
-    pending: list[dict[str, str | int | dict[str, str]]] = []
-    failed: list[str] = []
-    admin_id = message.from_user.id if message.from_user else 0
-
-    for phone in phones:
-        runtime = random_desktop_runtime()
-        login_id = secrets.token_hex(4)
-        phone_digits = phone.lstrip("+")
-        session_path = unique_path(config.temp_dir, f"temp_session_{admin_id}_{phone_digits}_{login_id}.session")
-        try:
-            code_request = await send_code(
-                session_path,
-                phone,
-                config.telegram_api_id,
-                config.telegram_api_hash,
-                runtime,
-            )
-        except Exception as exc:
-            failed.append(f"{phone}: ошибка отправки кода — {exc}")
-            continue
-
-        if code_request.already_authorized and code_request.user:
-            try:
-                await _finalize_code_login_impl(
-                    message,
-                    config,
-                    session_path=session_path,
-                    phone=phone,
-                    login_id=login_id,
-                    runtime=runtime,
-                    admin_id=admin_id,
-                    twofa=None,
-                    user=code_request.user,
-                    clear_state=False,
-                )
-            except Exception as exc:
-                failed.append(f"{phone}: ошибка завершения — {exc}")
-            continue
-
-        pending.append(
-            {
-                "phone": phone,
-                "phone_code_hash": code_request.phone_code_hash,
-                "session_path": str(session_path),
-                "login_id": login_id,
-                "admin_id": admin_id,
-                "runtime": runtime,
-            }
-        )
-
-    if not pending and failed:
-        await state.clear()
-        await message.answer("Не удалось отправить код ни на один номер.\n" + "\n".join(failed[:20]))
-        return
-
-    await state.update_data(pending_bulk_accounts=pending)
-    await state.set_state(AddByBulkCode.waiting_codes)
-
-    response = "Запросы на коды отправлены. Отправь коды в том же порядке, по одной строке на номер."
-    if failed:
-        response += "\n\nНе получилось отправить код на:\n" + "\n".join(failed[:20])
-    await message.answer(response)
-
-
-@router.message(AddByBulkCode.waiting_codes)
-async def add_bulk_code_confirm(message: Message, state: FSMContext, config: Config) -> None:
-    data = await state.get_data()
-    pending = data.get("pending_bulk_accounts")
-    if not isinstance(pending, list) or not pending:
-        await state.clear()
-        await message.answer(
-            "Не найдены ожидающие номера. Начни сначала, отправив телефоны.",
-            reply_markup=accounts_menu(),
-        )
-        return
-
-    code_lines = [line.strip() for line in (message.text or "").splitlines() if line.strip()]
-    codes = [_normalize_login_code(line) for line in code_lines]
-    if not all(codes):
-        await message.answer("Коды должны быть цифрами. Отправь их снова, по одной строке на номер.")
-        return
-
-    if len(codes) != len(pending):
-        await message.answer(
-            f"Ожидаются коды для {len(pending)} номеров, а пришло {len(codes)}. Отправь коды заново."
-        )
-        return
-
-    created = []
-    for account_data, code in zip(pending, codes):
-        session_path = Path(account_data["session_path"])
-        phone = account_data["phone"]
-        login_id = account_data["login_id"]
-        runtime = account_data["runtime"]
-        admin_id = account_data.get("admin_id") or (message.from_user.id if message.from_user else 0)
-        phone_code_hash = account_data.get("phone_code_hash")
-
-        if not phone_code_hash:
-            created.append(f"{phone}: отсутствует код-хэш.")
-            continue
-
-        try:
-            user = await sign_in_code(
-                session_path,
-                phone,
-                code,
-                phone_code_hash,
-                config.telegram_api_id,
-                config.telegram_api_hash,
-                runtime,
-            )
-        except Exception as exc:
-            created.append(f"{phone}: ошибка входа — {exc}")
-            continue
-
-        try:
-            await _finalize_code_login_impl(
-                message,
-                config,
-                session_path=str(session_path),
-                phone=phone,
-                login_id=login_id,
-                runtime=runtime,
-                admin_id=admin_id,
-                twofa=None,
-                user=user,
-                clear_state=False,
-            )
-        except Exception as exc:
-            created.append(f"{phone}: ошибка добавления — {exc}")
-
-    await state.clear()
-    if created:
-        await message.answer("Готово.\n\n" + "\n".join(created[:20]), reply_markup=accounts_menu())
-    else:
-        await message.answer("Все аккаунты добавлены.", reply_markup=accounts_menu())
 
 
 @router.message(AddByCode.waiting_phone)
@@ -842,25 +401,16 @@ async def add_by_code_phone(message: Message, state: FSMContext, config: Config)
         await message.answer("Номер некорректный. Отправь номер с кодом страны, например: +15074486037")
         return
 
-    runtime = random_desktop_runtime()
+    runtime = random_iphone_runtime()
     admin_id = message.from_user.id if message.from_user else 0
     login_id = secrets.token_hex(4)
     phone_digits = phone.lstrip("+")
     session_path = unique_path(config.temp_dir, f"temp_session_{admin_id}_{phone_digits}_{login_id}.session")
     try:
-        code_request = await send_code(
-            session_path,
-            phone,
-            config.telegram_api_id,
-            config.telegram_api_hash,
-            runtime,
-        )
+        code_request = await send_code(session_path, phone, config.telegram_api_id, config.telegram_api_hash, runtime)
     except Exception as exc:
         await state.clear()
-        await message.answer(
-            f"Не удалось отправить код Telegram: {exc}",
-            reply_markup=add_account_menu(),
-        )
+        await message.answer(f"Не удалось отправить код Telegram: {exc}", reply_markup=accounts_menu())
         return
 
     await state.update_data(
@@ -878,10 +428,7 @@ async def add_by_code_phone(message: Message, state: FSMContext, config: Config)
         return
     if code_request.already_authorized:
         await state.clear()
-        await message.answer(
-            "Сессия уже авторизована, но Telegram не вернул данные аккаунта.",
-            reply_markup=add_account_menu(),
-        )
+        await message.answer("Сессия уже авторизована, но Telegram не вернул данные аккаунта.", reply_markup=accounts_menu())
         return
 
     info_text = _code_request_text(code_request)
@@ -892,8 +439,7 @@ async def add_by_code_phone(message: Message, state: FSMContext, config: Config)
 
 @router.message(AddByCode.waiting_code)
 async def add_by_code_message_code(message: Message, state: FSMContext, config: Config) -> None:
-    code = _normalize_login_code(message.text or "")
-    await complete_code(message, state, config, code)
+    await complete_code(message, state, config, _normalize_login_code(message.text or ""))
 
 
 @router.callback_query(AddByCode.waiting_code, F.data.startswith("code:"))
@@ -913,18 +459,12 @@ async def add_by_code_digit(callback: CallbackQuery, state: FSMContext, config: 
         return
 
     if callback.data == "code:clear":
-        if not code:
-            await callback.answer("Код уже пустой.")
-            return
         await state.update_data(code="")
         await callback.message.edit_text(_code_entry_text(info_text, ""), reply_markup=digit_code_keyboard())
         await callback.answer("Код очищен.")
         return
 
     if callback.data == "code:backspace":
-        if not code:
-            await callback.answer("Код уже пустой.")
-            return
         code = code[:-1]
         await state.update_data(code=code)
         await callback.message.edit_text(_code_entry_text(info_text, code), reply_markup=digit_code_keyboard())
@@ -948,7 +488,7 @@ async def complete_code(message: Message, state: FSMContext, config: Config, cod
     data = await state.get_data()
     phone_code_hash = data.get("phone_code_hash")
     if not phone_code_hash:
-        await message.answer("Не найден phone_code_hash. Запроси код ещё раз.", reply_markup=digit_code_keyboard())
+        await message.answer("Не найден phone_code_hash. Запроси код еще раз.", reply_markup=digit_code_keyboard())
         return
     try:
         user = await sign_in_code(
@@ -991,112 +531,14 @@ async def add_by_code_twofa(message: Message, state: FSMContext, config: Config)
     await finalize_code_login(message, state, config, twofa=password, user=user)
 
 
-@router.callback_query(F.data == "accounts:add:zip")
-async def add_zip_start(callback: CallbackQuery, state: FSMContext) -> None:
-    await state.set_state(AddByZip.waiting_zip)
-    await callback.message.edit_text("Загрузи .zip архив с .session и .json файлами.")
-    await callback.answer()
-
-
-@router.message(AddByZip.waiting_zip, F.document)
-async def add_zip_file(message: Message, bot: Bot, state: FSMContext, config: Config) -> None:
-    filename = message.document.file_name or ""
-    if not filename.lower().endswith(".zip"):
-        await message.answer("Нужен файл с расширением .zip.")
-        return
-
-    zip_path = unique_path(config.temp_dir, filename)
-    await download_document(bot, message.document, zip_path)
-    progress_message = await message.answer("ZIP получен. Начинаю импорт...")
-    last_progress_update = 0.0
-
-    async def update_zip_progress(done: int, total: int, current: str) -> None:
-        nonlocal last_progress_update
-        now = time.monotonic()
-        if done not in {0, total} and done % 5 != 0 and now - last_progress_update < 3:
-            return
-        last_progress_update = now
-        current_line = f"\nСейчас: {current}" if current else ""
-        try:
-            await progress_message.edit_text(
-                f"Импорт ZIP...\nГотово: {done}/{total}{current_line}"
-            )
-        except Exception:
-            pass
-
-    try:
-        results, summary = await import_zip(
-            config,
-            zip_path=zip_path,
-            created_by=message.from_user.id if message.from_user else None,
-            progress=update_zip_progress,
-        )
-    except Exception as exc:
-        await state.clear()
-        try:
-            await progress_message.edit_text(f"Импорт ZIP не удался: {exc}")
-        except Exception:
-            pass
-        await message.answer(
-            f"Импорт ZIP не удался: {exc}",
-            reply_markup=add_account_menu(),
-        )
-        return
-
-    lines = [summary, "", "Добавлено в общее хранилище", ""]
-    for result in results[:20]:
-        if result.account_id:
-            lines.append(f"#{result.account_id} | {result.status} | {result.phone or result.username or '-'}")
-        else:
-            lines.append(f"ERROR | {result.note or 'unknown error'}")
-    if len(results) > 20:
-        lines.append(f"...и еще {len(results) - 20}")
-    await state.clear()
-    try:
-        await progress_message.edit_text("Импорт ZIP завершён.")
-    except Exception:
-        pass
-    await message.answer("\n".join(lines), reply_markup=accounts_menu())
-
-
-@router.message(F.text)
-async def trigger_account_giveout(message: Message, state: FSMContext, bot: Bot, config: Config) -> None:
-    current_state = await state.get_state()
-    if current_state is not None:
-        return
-    if not _is_trigger_message(message, config):
-        return
-    if (message.text or "").strip() == "/cancel":
-        return
-    await _give_out_accounts(message, bot, config)
-
-
-@router.message(F.text == "/cancel")
-async def cancel(message: Message, state: FSMContext) -> None:
-    await state.clear()
-    await message.answer("Отменено.", reply_markup=accounts_menu())
-
-
 @router.callback_query(F.data.startswith("accounts:page:"))
 async def show_accounts_page(callback: CallbackQuery, state: FSMContext, config: Config) -> None:
     await state.clear()
     _, _, origin, raw_ref, raw_page = callback.data.split(":", 4)
-    await _show_account_page(callback, config, origin, int(raw_ref), int(raw_page))
-
-
-@router.callback_query(F.data.startswith("accounts:reg_filter:"))
-async def show_registration_filter(callback: CallbackQuery) -> None:
-    origin = callback.data.split(":", 2)[-1]
-    if parse_reg_origin(origin) is None:
-        await callback.answer("Фильтр доступен только в разделе РЕГ.", show_alert=True)
+    if not _origin_is_valid(origin):
+        await callback.answer("Раздел больше недоступен.", show_alert=True)
         return
-    await callback.message.edit_text(
-        "Фильтр РЕГ\n\n"
-        "Можно смотреть аккаунты, которые регались в конкретном сервисе, "
-        "или наоборот исключить этот сервис.",
-        reply_markup=registration_filter_menu(origin),
-    )
-    await callback.answer()
+    await _show_storage_page(callback, config, int(raw_ref), int(raw_page))
 
 
 @router.callback_query(F.data.startswith("accounts:phone:"))
@@ -1117,18 +559,14 @@ async def send_account_phone(callback: CallbackQuery, config: Config) -> None:
 async def ask_check_account(callback: CallbackQuery, config: Config) -> None:
     _, _, raw_account_id, origin, raw_ref, raw_page = callback.data.split(":", 5)
     if not _origin_is_valid(origin):
-        await callback.answer("Этот раздел больше недоступен.", show_alert=True)
+        await callback.answer("Раздел больше недоступен.", show_alert=True)
         return
     account = get_account(config, int(raw_account_id))
     if not account:
         await callback.answer("Аккаунт не найден.", show_alert=True)
         return
     await callback.message.edit_text(
-        (
-            "Проверить аккаунт?\n\n"
-            "Бот только подключится к существующей session и проверит авторизацию. "
-            "Новый код запрашиваться не будет."
-        ),
+        "Проверить аккаунт?\n\nБот подключится к текущей session и проверит авторизацию. Новый код запрашиваться не будет.",
         reply_markup=confirm_check_account_menu(account.id, origin, int(raw_ref), int(raw_page)),
     )
     await callback.answer()
@@ -1138,7 +576,7 @@ async def ask_check_account(callback: CallbackQuery, config: Config) -> None:
 async def confirm_check_account(callback: CallbackQuery, config: Config) -> None:
     _, _, raw_account_id, origin, raw_ref, raw_page = callback.data.split(":", 5)
     if not _origin_is_valid(origin):
-        await callback.answer("Этот раздел больше недоступен.", show_alert=True)
+        await callback.answer("Раздел больше недоступен.", show_alert=True)
         return
     account_id = int(raw_account_id)
     account = get_account(config, account_id)
@@ -1152,13 +590,7 @@ async def confirm_check_account(callback: CallbackQuery, config: Config) -> None
         account = get_account(config, account_id)
         await callback.message.edit_text(
             _account_detail_text(account),
-            reply_markup=account_detail_menu(
-                account.id,
-                account_stage=account.account_stage,
-                origin=origin,
-                ref_id=int(raw_ref),
-                page=int(raw_page),
-            ),
+            reply_markup=account_detail_menu(account.id, origin=origin, ref_id=int(raw_ref), page=int(raw_page)),
         )
         await callback.answer("Session файл не найден.", show_alert=True)
         return
@@ -1192,134 +624,16 @@ async def confirm_check_account(callback: CallbackQuery, config: Config) -> None
 
     await callback.message.edit_text(
         text,
-        reply_markup=account_detail_menu(
-            account.id,
-            account_stage=account.account_stage,
-            origin=origin,
-            ref_id=int(raw_ref),
-            page=int(raw_page),
-        ),
+        reply_markup=account_detail_menu(account.id, origin=origin, ref_id=int(raw_ref), page=int(raw_page)),
     )
     await callback.answer("Проверка завершена.")
-
-
-async def _send_account_code(callback: CallbackQuery, config: Config, *, verification: bool) -> None:
-    account_id = int(callback.data.rsplit(":", 1)[-1])
-    account = get_account(config, account_id)
-    if not account:
-        await callback.answer("Аккаунт не найден.", show_alert=True)
-        return
-    session_path = Path(account.session_path)
-    if not session_path.exists():
-        await callback.answer("Session файл не найден.", show_alert=True)
-        return
-    try:
-        api_id, api_hash, runtime = _account_connection_params(account, config)
-        if verification:
-            code = await get_latest_verification_code(session_path, api_id, api_hash, runtime)
-            title = "Verification Code"
-            not_found = "Verification code не найден в последних сообщениях."
-        else:
-            code = await get_latest_telegram_code(session_path, api_id, api_hash, runtime)
-            title = "Код Telegram"
-            not_found = "Код Telegram не найден в последних сообщениях."
-    except Exception as exc:
-        await callback.message.answer(f"Не удалось получить код: {escape(str(exc))}")
-        await callback.answer()
-        return
-
-    if not code:
-        await callback.message.answer(not_found)
-        await callback.answer()
-        return
-
-    await callback.message.answer(f"{title}: <code>{escape(code)}</code>")
-    await callback.answer("Код найден.")
-
-
-@router.callback_query(F.data.startswith("account:request_code:"))
-async def request_account_code(callback: CallbackQuery, config: Config, bot: Bot) -> None:
-    parts = callback.data.split(":")
-    if len(parts) < 5:
-        await callback.answer("Некорректный запрос.", show_alert=True)
-        return
-    account_id = int(parts[2])
-    account = get_account(config, account_id)
-    if not account:
-        await callback.answer("Аккаунт не найден.", show_alert=True)
-        return
-    session_path = Path(account.session_path)
-    if not session_path.exists():
-        delete_account_row(config, account.id)
-        await _notify_owners(
-            bot,
-            config,
-            reason="session file missing on code request",
-            account_phone=account.phone,
-            requester_chat_id=callback.message.chat.id,
-            requester_user_id=callback.from_user.id if callback.from_user else None,
-        )
-        await callback.answer("Аккаунт больше недоступен.", show_alert=True)
-        return
-    try:
-        api_id, api_hash, runtime = _account_connection_params(account, config)
-        status, _, _ = await inspect_session(session_path, api_id, api_hash, runtime)
-    except Exception as exc:
-        delete_account_row(config, account.id)
-        await _notify_owners(
-            bot,
-            config,
-            reason=f"inspect error on code request: {exc}",
-            account_phone=account.phone,
-            requester_chat_id=callback.message.chat.id,
-            requester_user_id=callback.from_user.id if callback.from_user else None,
-        )
-        await callback.answer("Аккаунт больше недоступен.", show_alert=True)
-        return
-    if status != "active":
-        delete_account_row(config, account.id)
-        await _notify_owners(
-            bot,
-            config,
-            reason=f"invalid status on code request: {status}",
-            account_phone=account.phone,
-            requester_chat_id=callback.message.chat.id,
-            requester_user_id=callback.from_user.id if callback.from_user else None,
-        )
-        await callback.answer("Аккаунт больше недоступен.", show_alert=True)
-        return
-    try:
-        api_id, api_hash, runtime = _account_connection_params(account, config)
-        code = await get_latest_telegram_code(session_path, api_id, api_hash, runtime)
-    except Exception as exc:
-        await callback.message.answer(f"Не удалось получить код: {escape(str(exc))}")
-        await callback.answer()
-        return
-    if not code:
-        await callback.message.answer("Код Telegram не найден.")
-        await callback.answer()
-        return
-    await callback.message.answer(
-        f"Код для входа: <code>{escape(code)}</code>\nНомер: {escape(account.phone or '-')}",
-    )
-    await callback.answer("Код отправлен.")
-
-
-@router.callback_query(F.data.startswith("account:telegram_code:"))
-async def send_telegram_code(callback: CallbackQuery, config: Config) -> None:
-    await _send_account_code(callback, config, verification=False)
-
-
-@router.callback_query(F.data.startswith("account:verification_code:"))
-async def send_verification_code(callback: CallbackQuery, config: Config) -> None:
-    await _send_account_code(callback, config, verification=True)
 
 
 @router.callback_query(F.data.startswith("account:open:"))
 async def show_account_detail_callback(callback: CallbackQuery, config: Config) -> None:
     _, _, raw_id, origin, raw_ref, raw_page = callback.data.split(":", 5)
     if not _origin_is_valid(origin):
-        await callback.answer("Этот раздел больше недоступен.", show_alert=True)
+        await callback.answer("Раздел больше недоступен.", show_alert=True)
         return
     account = get_account(config, int(raw_id))
     if not account:
@@ -1327,13 +641,7 @@ async def show_account_detail_callback(callback: CallbackQuery, config: Config) 
         return
     await callback.message.edit_text(
         _account_detail_text(account),
-        reply_markup=account_detail_menu(
-            account.id,
-            account_stage=account.account_stage,
-            origin=origin,
-            ref_id=int(raw_ref),
-            page=int(raw_page),
-        ),
+        reply_markup=account_detail_menu(account.id, origin=origin, ref_id=int(raw_ref), page=int(raw_page)),
     )
     await callback.answer()
 
@@ -1345,10 +653,9 @@ async def show_account_detail_message(message: Message, config: Config) -> None:
     if not account:
         await message.answer("Аккаунт не найден.")
         return
-    origin = _origin_for_account(account)
     await message.answer(
         _account_detail_text(account),
-        reply_markup=account_detail_menu(account.id, account_stage=account.account_stage, origin=origin, ref_id=0, page=0),
+        reply_markup=account_detail_menu(account.id, origin="storage", ref_id=0, page=0),
     )
 
 
@@ -1369,24 +676,13 @@ async def download_account_file(callback: CallbackQuery, config: Config) -> None
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith("accounts:zip_common:"))
-async def download_common_stage_zip(callback: CallbackQuery, config: Config) -> None:
-    parts = callback.data.split(":")
-    stage = parts[2] if len(parts) > 2 else ""
-    raw_filter = parts[3] if len(parts) > 3 else "all"
-    registration_service: str | None = None
-    excluded_service: str | None = None
-    if stage == "clean":
-        accounts = list_accounts_by_scope(config, excluded_account_stage="issued")
-    elif stage == "issued":
-        accounts = list_accounts_by_scope(config, account_stage="issued")
-    else:
-        await callback.answer("Неизвестный раздел.", show_alert=True)
-        return
+@router.callback_query(F.data == "accounts:zip_all")
+async def download_storage_zip(callback: CallbackQuery, config: Config) -> None:
+    accounts = list_accounts_by_scope(config)
     if not accounts:
-        await callback.answer("В этом разделе нет аккаунтов.", show_alert=True)
+        await callback.answer("В хранилище нет аккаунтов.", show_alert=True)
         return
-    zip_path, files_count = _make_accounts_zip(config, accounts, stage)
+    zip_path, files_count = _make_accounts_zip(config, accounts)
     if files_count == 0:
         try:
             zip_path.unlink(missing_ok=True)
@@ -1396,7 +692,7 @@ async def download_common_stage_zip(callback: CallbackQuery, config: Config) -> 
         return
     await callback.message.answer_document(
         FSInputFile(zip_path),
-        caption=f"Хранилище {_stage_filter_title(stage, registration_service, excluded_service)}: {len(accounts)} аккаунтов, {files_count} файлов.",
+        caption=f"Хранилище: {len(accounts)} аккаунтов, {files_count} файлов.",
     )
     try:
         zip_path.unlink(missing_ok=True)
@@ -1432,284 +728,39 @@ async def confirm_delete_account(callback: CallbackQuery, config: Config) -> Non
     if not account:
         await callback.answer("Аккаунт не найден.", show_alert=True)
         return
-    stage = account.account_stage
     removed_files = _delete_local_account_files(config, [account])
     delete_account_row(config, account.id)
-    clean_count, issued_count = _common_account_counts(config)
+    total = count_accounts(config)
     await callback.message.edit_text(
-        (
-            f"Аккаунт #{account.id} удален из бота.\n"
-            f"Файлов удалено с сервера: {removed_files}\n\n"
-            f"Хранилище\nЧистые: {clean_count}\nВыданные: {issued_count}"
-        ),
-        reply_markup=common_storage_sections_menu(clean_count=clean_count, issued_count=issued_count),
+        f"Аккаунт #{account.id} удален из бота.\nФайлов удалено с сервера: {removed_files}\n\nХранилище: {total}",
+        reply_markup=accounts_menu(),
     )
-    await callback.answer(f"Удалено из {_stage_title(stage)}.")
+    await callback.answer("Удалено.")
 
 
-@router.callback_query(F.data.startswith("accounts:delete_common_ask:"))
-async def ask_delete_common_stage(callback: CallbackQuery, config: Config) -> None:
-    parts = callback.data.split(":")
-    stage = parts[2] if len(parts) > 2 else ""
-    raw_filter = parts[3] if len(parts) > 3 else "all"
-    registration_service: str | None = None
-    excluded_service: str | None = None
-    if stage == "clean":
-        total = count_accounts_by_stage(config, excluded_account_stage="issued")
-    elif stage == "issued":
-        total = count_accounts_by_stage(config, account_stage="issued")
-    else:
-        await callback.answer("Неизвестный раздел.", show_alert=True)
-        return
+@router.callback_query(F.data == "accounts:delete_all_ask")
+async def ask_delete_all_accounts(callback: CallbackQuery, config: Config) -> None:
+    total = count_accounts(config)
     if not total:
-        await callback.answer("В этом разделе нет аккаунтов.", show_alert=True)
+        await callback.answer("В хранилище нет аккаунтов.", show_alert=True)
         return
     await callback.message.edit_text(
-        (
-            f"ВЫ УВЕРЕНЫ ЧТО ХОТИТЕ УДАЛИТЬ ВЕСЬ {_stage_filter_title(stage, registration_service, excluded_service)}?\n"
-            f"Аккаунтов: {total}\nФайлы будут удалены только с сервера."
-        ),
-        reply_markup=confirm_delete_common_stage_menu(stage, registration_service, excluded_service),
+        f"ВЫ УВЕРЕНЫ ЧТО ХОТИТЕ УДАЛИТЬ ВСЕ ХРАНИЛИЩЕ?\nАккаунтов: {total}\nФайлы будут удалены только с сервера.",
+        reply_markup=confirm_delete_all_accounts_menu(),
     )
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith("accounts:delete_common_confirm:"))
-async def confirm_delete_common_stage(callback: CallbackQuery, config: Config) -> None:
-    parts = callback.data.split(":")
-    stage = parts[2] if len(parts) > 2 else ""
-    raw_filter = parts[3] if len(parts) > 3 else "all"
-    registration_service: str | None = None
-    excluded_service: str | None = None
-    if stage == "clean":
-        accounts = list_accounts_by_scope(config, excluded_account_stage="issued")
-        if not accounts:
-            await callback.answer("В этом разделе нет аккаунтов.", show_alert=True)
-            return
-        removed_files = _delete_local_account_files(config, accounts)
-        removed_rows = delete_accounts_by_stage(config, excluded_account_stage="issued")
-    elif stage == "issued":
-        accounts = list_accounts_by_scope(config, account_stage="issued")
-        if not accounts:
-            await callback.answer("В этом разделе нет аккаунтов.", show_alert=True)
-            return
-        removed_files = _delete_local_account_files(config, accounts)
-        removed_rows = delete_accounts_by_stage(config, account_stage="issued")
-    else:
-        await callback.answer("Неизвестный раздел.", show_alert=True)
+@router.callback_query(F.data == "accounts:delete_all_confirm")
+async def confirm_delete_all_accounts(callback: CallbackQuery, config: Config) -> None:
+    accounts = list_accounts_by_scope(config)
+    if not accounts:
+        await callback.answer("В хранилище нет аккаунтов.", show_alert=True)
         return
-    clean_count, issued_count = _common_account_counts(config)
+    removed_files = _delete_local_account_files(config, accounts)
+    removed_rows = delete_all_accounts(config)
     await callback.message.edit_text(
-        (
-            f"{_stage_filter_title(stage, None, None)} очищен.\n"
-            f"Аккаунтов удалено из бота: {removed_rows}\n"
-            f"Файлов удалено с сервера: {removed_files}\n\n"
-            f"Хранилище\nЧистые: {clean_count}\nВыданные: {issued_count}"
-        ),
-        reply_markup=common_storage_sections_menu(clean_count=clean_count, issued_count=issued_count),
+        f"Хранилище очищено.\nАккаунтов удалено из бота: {removed_rows}\nФайлов удалено с сервера: {removed_files}",
+        reply_markup=accounts_menu(),
     )
-    await callback.answer("Раздел очищен.")
-
-
-@router.callback_query(F.data.startswith("account:service:"))
-async def choose_registration_service(callback: CallbackQuery, state: FSMContext, config: Config) -> None:
-    _, _, raw_account_id, origin, raw_ref, raw_page = callback.data.split(":", 5)
-    if not _origin_is_valid(origin):
-        await callback.answer("Этот раздел больше недоступен.", show_alert=True)
-        return
-    account = get_account(config, int(raw_account_id))
-    if not account:
-        await callback.answer("Аккаунт не найден.", show_alert=True)
-        return
-    selected_services = list(services_from_storage(account.registration_services, account.registration_service))
-    await state.update_data(
-        service_edit_account_id=account.id,
-        service_edit_origin=origin,
-        service_edit_ref_id=int(raw_ref),
-        service_edit_page=int(raw_page),
-        service_edit_selected=selected_services,
-    )
-    await callback.message.edit_text(
-        _service_selection_text(selected_services),
-        reply_markup=registration_service_menu(selected_services),
-    )
-    await callback.answer()
-
-
-@router.callback_query(F.data.startswith("account:service_toggle:"))
-async def toggle_registration_service(callback: CallbackQuery, state: FSMContext) -> None:
-    _, _, service = callback.data.split(":", 2)
-    if not is_registration_service(service):
-        await callback.answer("Неизвестный сервис.", show_alert=True)
-        return
-    data = await state.get_data()
-    if "service_edit_account_id" not in data:
-        await callback.answer("Открой карточку аккаунта заново.", show_alert=True)
-        return
-    selected_services = list(data.get("service_edit_selected") or [])
-    if service in selected_services:
-        selected_services.remove(service)
-    else:
-        selected_services.append(service)
-    await state.update_data(service_edit_selected=selected_services)
-    await callback.message.edit_text(
-        _service_selection_text(selected_services),
-        reply_markup=registration_service_menu(selected_services),
-    )
-    await callback.answer()
-
-
-@router.callback_query(F.data == "account:service_save")
-async def save_registration_services(callback: CallbackQuery, state: FSMContext, config: Config) -> None:
-    data = await state.get_data()
-    account_id = data.get("service_edit_account_id")
-    if account_id is None:
-        await callback.answer("Открой карточку аккаунта заново.", show_alert=True)
-        return
-    selected_services = list(data.get("service_edit_selected") or [])
-    if not selected_services:
-        await callback.answer("Выбери хотя бы один сервис.", show_alert=True)
-        return
-    account = get_account(config, int(account_id))
-    if not account:
-        await state.clear()
-        await callback.answer("Аккаунт не найден.", show_alert=True)
-        return
-    set_account_stage(config, int(account_id), "reg", registration_services=selected_services)
-    account = get_account(config, int(account_id))
-    await state.clear()
-    if not account:
-        await callback.answer("Аккаунт не найден.", show_alert=True)
-        return
-    new_origin = _origin_for_account(account)
-    await callback.message.edit_text(
-        _account_detail_text(account),
-        reply_markup=account_detail_menu(
-            account.id,
-            account_stage=account.account_stage,
-            origin=new_origin,
-            ref_id=0,
-            page=0,
-        ),
-    )
-    await callback.answer(f"Сервисы сохранены: {services_label(account.registration_services, account.registration_service)}")
-
-
-@router.callback_query(F.data == "account:service_cancel")
-async def cancel_registration_services(callback: CallbackQuery, state: FSMContext, config: Config) -> None:
-    data = await state.get_data()
-    account_id = data.get("service_edit_account_id")
-    origin = data.get("service_edit_origin") or "common_reg"
-    ref_id = int(data.get("service_edit_ref_id") or 0)
-    page = int(data.get("service_edit_page") or 0)
-    await state.clear()
-    if account_id is None:
-        await callback.answer("Открой карточку аккаунта заново.", show_alert=True)
-        return
-    account = get_account(config, int(account_id))
-    if not account:
-        await callback.answer("Аккаунт не найден.", show_alert=True)
-        return
-    await callback.message.edit_text(
-        _account_detail_text(account),
-        reply_markup=account_detail_menu(
-            account.id,
-            account_stage=account.account_stage,
-            origin=origin,
-            ref_id=ref_id,
-            page=page,
-        ),
-    )
-    await callback.answer()
-
-
-@router.callback_query(F.data.startswith("account:stage_ask1:"))
-async def ask_account_stage_first(callback: CallbackQuery, config: Config) -> None:
-    _, _, raw_account_id, target_stage, origin, raw_ref, raw_page = callback.data.split(":", 6)
-    account = get_account(config, int(raw_account_id))
-    if not account:
-        await callback.answer("Аккаунт не найден.", show_alert=True)
-        return
-    if target_stage == "reg":
-        await callback.answer("Сначала выбери сервисы.", show_alert=True)
-        return
-    else:
-        text = "ВЫ УВЕРЕНЫ ЧТО ХОТИТЕ ПЕРЕНЕСТИ АКК В НЕРЕГ?"
-    await callback.message.edit_text(
-        text,
-        reply_markup=confirm_account_stage_menu(
-            account.id,
-            target_stage,
-            None,
-            origin,
-            int(raw_ref),
-            int(raw_page),
-            step=1,
-        ),
-    )
-    await callback.answer()
-
-
-@router.callback_query(F.data.startswith("account:stage_ask2:"))
-async def ask_account_stage_second(callback: CallbackQuery, config: Config) -> None:
-    _, _, raw_account_id, target_stage, raw_service, origin, raw_ref, raw_page = callback.data.split(":", 7)
-    registration_service = None if raw_service == "none" else raw_service
-    account = get_account(config, int(raw_account_id))
-    if not account:
-        await callback.answer("Аккаунт не найден.", show_alert=True)
-        return
-    if target_stage == "reg":
-        if not is_registration_service(registration_service):
-            await callback.answer("Неизвестный сервис.", show_alert=True)
-            return
-        text = f"ПОДТВЕРДИТЕ ЕЩЕ РАЗ: ПОМЕТИТЬ АКК РЕГАННЫМ?\nСервис: {service_label(registration_service)}"
-    else:
-        text = "ПОДТВЕРДИТЕ ЕЩЕ РАЗ: ПЕРЕНЕСТИ АКК В НЕРЕГ?"
-    await callback.message.edit_text(
-        text,
-        reply_markup=confirm_account_stage_menu(
-            account.id,
-            target_stage,
-            registration_service,
-            origin,
-            int(raw_ref),
-            int(raw_page),
-            step=2,
-        ),
-    )
-    await callback.answer()
-
-
-@router.callback_query(F.data.startswith("account:stage_confirm:"))
-async def confirm_account_stage(callback: CallbackQuery, config: Config) -> None:
-    _, _, raw_account_id, target_stage, raw_service, _origin, _raw_ref, _raw_page = callback.data.split(":", 7)
-    registration_service = None if raw_service == "none" else raw_service
-    account_id = int(raw_account_id)
-    account = get_account(config, account_id)
-    if not account:
-        await callback.answer("Аккаунт не найден.", show_alert=True)
-        return
-    if target_stage == "reg" and not is_registration_service(registration_service):
-        await callback.answer("Неизвестный сервис.", show_alert=True)
-        return
-    set_account_stage(config, account_id, target_stage, registration_service)
-    account = get_account(config, account_id)
-    if not account:
-        await callback.answer("Аккаунт не найден.", show_alert=True)
-        return
-    new_origin = _origin_for_account(account)
-    await callback.message.edit_text(
-        _account_detail_text(account),
-        reply_markup=account_detail_menu(
-            account.id,
-            account_stage=account.account_stage,
-            origin=new_origin,
-            ref_id=0,
-            page=0,
-        ),
-    )
-    if target_stage == "reg":
-        done = f"Аккаунт перенесен в РЕГ {service_label(registration_service)}."
-    else:
-        done = "Аккаунт перенесен в НЕРЕГ."
-    await callback.answer(done)
+    await callback.answer("Хранилище очищено.")

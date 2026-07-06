@@ -5,7 +5,7 @@ from tglol.keyboards import account_detail_menu
 
 class StorageMenuTests(unittest.TestCase):
     def test_account_detail_menu_has_no_registration_buttons(self) -> None:
-        markup = account_detail_menu(1, account_stage="nereg", origin="common", ref_id=0, page=0)
+        markup = account_detail_menu(1, account_stage="storage", origin="storage", ref_id=0, page=0)
         buttons = [button.text for row in markup.inline_keyboard for button in row]
         lowered = [button.lower() for button in buttons]
 
