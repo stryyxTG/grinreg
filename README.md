@@ -69,14 +69,14 @@ OWNER_IDS=111111111,222222222,333333333
 ## Запуск
 
 ```bash
-python bot.py
+python bot2.py
 ```
 
 Запуск на сервере через `nohup`:
 
 ```bash
 source venv/bin/activate
-nohup python bot.py > bot.log 2>&1 &
+nohup python bot2.py > bot.log 2>&1 &
 ```
 
 Проверить лог:
@@ -88,7 +88,7 @@ tail -f bot.log
 Остановить процесс:
 
 ```bash
-ps aux | grep bot.py
+ps aux | grep bot2.py
 kill PROCESS_ID
 ```
 
@@ -122,6 +122,6 @@ storage/
 ## Проверка проекта
 
 ```bash
-python -m compileall -q bot.py tglol
+python -m compileall -q bot2.py tglol
 python -m unittest discover -s tests -p "test*.py"
 ```
