@@ -8,7 +8,7 @@ from typing import Any
 
 from telethon import TelegramClient
 from telethon import functions, types
-from telethon.errors import SessionPasswordNeededError
+from telethon.errors import PhoneNumberUnoccupiedError, SessionPasswordNeededError
 from telethon.tl.types import User
 
 
@@ -84,24 +84,23 @@ async def send_code(
                 phone_number=phone,
                 api_id=api_id,
                 api_hash=api_hash,
-                settings=types.CodeSettings(unknown_number=unknown_number),
+                settings=types.CodeSettings(
+                    allow_flashcall=True,
+                    allow_missed_call=True,
+                    unknown_number=unknown_number,
+                ),
             )
         )
+        request = code_request_from_sent_code(sent)
         logger.info(
             "Telegram login code requested: phone=%s delivery=%s next=%s timeout=%s length=%s",
             phone,
-            type(sent.type).__name__,
-            type(sent.next_type).__name__ if sent.next_type else None,
-            sent.timeout,
-            getattr(sent.type, "length", None),
+            request.delivery_type,
+            request.next_type,
+            request.timeout,
+            request.code_length,
         )
-        return CodeRequest(
-            phone_code_hash=sent.phone_code_hash,
-            delivery_type=type(sent.type).__name__,
-            next_type=type(sent.next_type).__name__ if sent.next_type else None,
-            timeout=sent.timeout,
-            code_length=getattr(sent.type, "length", None),
-        )
+        return request
     finally:
         await client.disconnect()
 
@@ -118,20 +117,39 @@ async def resend_code(
     await client.connect()
     try:
         sent = await client(functions.auth.ResendCodeRequest(phone, phone_code_hash))
+        request = code_request_from_sent_code(sent)
         logger.info(
             "Telegram login code resent: phone=%s delivery=%s next=%s timeout=%s length=%s",
             phone,
-            type(sent.type).__name__,
-            type(sent.next_type).__name__ if sent.next_type else None,
-            sent.timeout,
-            getattr(sent.type, "length", None),
+            request.delivery_type,
+            request.next_type,
+            request.timeout,
+            request.code_length,
         )
-        return code_request_from_sent_code(sent)
+        return request
     finally:
         await client.disconnect()
 
 
 def code_request_from_sent_code(sent) -> CodeRequest:
+    if isinstance(sent, types.auth.SentCodeSuccess):
+        return CodeRequest(
+            phone_code_hash=None,
+            delivery_type="SentCodeSuccess",
+            next_type=None,
+            timeout=None,
+            code_length=None,
+            already_authorized=True,
+            user=sent.authorization.user,
+        )
+    if not hasattr(sent, "type"):
+        return CodeRequest(
+            phone_code_hash=getattr(sent, "phone_code_hash", None),
+            delivery_type=type(sent).__name__,
+            next_type=None,
+            timeout=None,
+            code_length=None,
+        )
     return CodeRequest(
         phone_code_hash=sent.phone_code_hash,
         delivery_type=type(sent.type).__name__,
@@ -141,7 +159,7 @@ def code_request_from_sent_code(sent) -> CodeRequest:
     )
 
 
-async def sign_in_code(
+async def sign_in_or_sign_up(
     session_path: Path,
     phone: str,
     code: str,
@@ -153,11 +171,32 @@ async def sign_in_code(
     client = client_for(session_path, api_id, api_hash, runtime)
     await client.connect()
     try:
-        await client.sign_in(phone=phone, code=code, phone_code_hash=phone_code_hash)
-        me = await client.get_me()
-        if me is None:
+        try:
+            result = await client(
+                functions.auth.SignInRequest(
+                    phone_number=phone,
+                    phone_code_hash=phone_code_hash,
+                    phone_code=code,
+                )
+            )
+        except PhoneNumberUnoccupiedError:
+            result = types.auth.AuthorizationSignUpRequired()
+
+        if isinstance(result, types.auth.AuthorizationSignUpRequired):
+            first_name, last_name = random_signup_name()
+            result = await client(
+                functions.auth.SignUpRequest(
+                    phone_number=phone,
+                    phone_code_hash=phone_code_hash,
+                    first_name=first_name,
+                    last_name=last_name,
+                    no_joined_notifications=True,
+                )
+            )
+        user = getattr(result, "user", None)
+        if user is None:
             raise RuntimeError("Login succeeded but account info is empty")
-        return me
+        return await client._on_login(user)
     finally:
         await client.disconnect()
 
@@ -225,36 +264,6 @@ def random_signup_name() -> tuple[str, str]:
         "Victor",
     )
     return random.choice(first_names), ""
-
-
-async def sign_up_account(
-    session_path: Path,
-    phone: str,
-    phone_code_hash: str,
-    api_id: int,
-    api_hash: str,
-    runtime: dict[str, str],
-    *,
-    first_name: str | None = None,
-    last_name: str | None = None,
-) -> User:
-    first_name, default_last_name = random_signup_name() if not first_name else (first_name, "")
-    last_name = default_last_name if last_name is None else last_name
-    client = client_for(session_path, api_id, api_hash, runtime)
-    await client.connect()
-    try:
-        result = await client(
-            functions.auth.SignUpRequest(
-                phone_number=phone,
-                phone_code_hash=phone_code_hash,
-                first_name=first_name,
-                last_name=last_name,
-                no_joined_notifications=True,
-            )
-        )
-        return await client._on_login(result.user)
-    finally:
-        await client.disconnect()
 
 
 async def sign_in_password(

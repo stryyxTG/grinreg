@@ -13,7 +13,7 @@ from aiogram import BaseMiddleware, F, Router
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, FSInputFile, Message, TelegramObject
-from telethon.errors import PhoneNumberUnoccupiedError, SessionPasswordNeededError
+from telethon.errors import SessionPasswordNeededError
 
 from tglol.config import Config
 from tglol.db import (
@@ -45,9 +45,8 @@ from tglol.telegram_service import (
     resend_code,
     send_code,
     send_login_email_code,
-    sign_in_code,
+    sign_in_or_sign_up,
     sign_in_password,
-    sign_up_account,
     user_fields,
     verify_login_email_code,
 )
@@ -235,8 +234,13 @@ def _code_request_text(request) -> str:
     elif request.delivery_type == "SentCodeTypeApp":
         lines.append("")
         lines.append("Telegram отправил код в приложение аккаунта. Email здесь не принимается API.")
-    lines.append("")
-    lines.append("Введите код кнопками или одним сообщением.")
+        lines.append("Если кода нет, можно попробовать кнопку «Другой способ» после таймера.")
+    elif request.delivery_type == "SentCodePaymentRequired":
+        lines.append("")
+        lines.append("Telegram требует платное подтверждение для этого номера. Обычный API не может продолжить регистрацию.")
+    if request.delivery_type != "SentCodePaymentRequired":
+        lines.append("")
+        lines.append("Введите код кнопками или одним сообщением.")
     return "\n".join(lines)
 
 
@@ -247,6 +251,10 @@ def _code_entry_text(info_text: str, code: str) -> str:
 
 def _code_request_needs_email(request) -> bool:
     return request.delivery_type == "SentCodeTypeSetUpEmailRequired"
+
+
+def _code_request_is_blocked(request) -> bool:
+    return request.delivery_type == "SentCodePaymentRequired"
 
 
 def _friendly_code_error(exc: Exception) -> str:
@@ -478,21 +486,10 @@ async def add_by_code_phone(message: Message, state: FSMContext, config: Config)
         await state.clear()
         await message.answer("Сессия уже авторизована, но Telegram не вернул данные аккаунта.", reply_markup=accounts_menu())
         return
-    if code_request.delivery_type == "SentCodeTypeApp" and code_request.phone_code_hash:
-        try:
-            resent_request = await resend_code(
-                session_path,
-                phone,
-                code_request.phone_code_hash,
-                config.telegram_api_id,
-                config.telegram_api_hash,
-                runtime,
-            )
-            await state.update_data(phone_code_hash=resent_request.phone_code_hash)
-            code_request = resent_request
-        except Exception as exc:
-            await state.update_data(resend_error=str(exc))
-
+    if _code_request_is_blocked(code_request):
+        await state.clear()
+        await message.answer(_code_request_text(code_request), reply_markup=accounts_menu())
+        return
     if _code_request_needs_email(code_request):
         await state.set_state(AddByCode.waiting_email)
         await message.answer(
@@ -590,8 +587,25 @@ async def add_by_code_email_code(message: Message, state: FSMContext, config: Co
         code="",
         code_info_text=_code_request_text(code_request),
     )
+    if _code_request_is_blocked(code_request):
+        await state.clear()
+        await message.answer(_code_request_text(code_request), reply_markup=accounts_menu())
+        return
+    if _code_request_needs_email(code_request):
+        await state.set_state(AddByCode.waiting_email)
+        await message.answer(
+            (
+                "Telegram снова просит указать email для регистрации.\n\n"
+                f"Raw type: {code_request.delivery_type}\n\n"
+                "Отправь email, на который придет код подтверждения."
+            )
+        )
+        return
+
+    info_text = _code_request_text(code_request)
+    await state.update_data(code_info_text=info_text)
     await state.set_state(AddByCode.waiting_code)
-    await message.answer(_code_entry_text(_code_request_text(code_request), ""), reply_markup=digit_code_keyboard())
+    await message.answer(_code_entry_text(info_text, ""), reply_markup=digit_code_keyboard())
 
 
 @router.message(AddByCode.waiting_code)
@@ -658,6 +672,11 @@ async def add_by_code_digit(callback: CallbackQuery, state: FSMContext, config: 
             code="",
             code_info_text=_code_request_text(code_request),
         )
+        if _code_request_is_blocked(code_request):
+            await state.clear()
+            await callback.message.answer(_code_request_text(code_request), reply_markup=accounts_menu())
+            await callback.answer()
+            return
         if _code_request_needs_email(code_request):
             await state.set_state(AddByCode.waiting_email)
             await callback.message.answer(
@@ -687,7 +706,7 @@ async def complete_code(message: Message, state: FSMContext, config: Config, cod
         await message.answer("Не найден phone_code_hash. Запроси код еще раз.", reply_markup=digit_code_keyboard())
         return
     try:
-        user = await sign_in_code(
+        user = await sign_in_or_sign_up(
             Path(data["session_path"]),
             data["phone"],
             code,
@@ -696,20 +715,6 @@ async def complete_code(message: Message, state: FSMContext, config: Config, cod
             config.telegram_api_hash,
             data["runtime"],
         )
-    except PhoneNumberUnoccupiedError:
-        try:
-            user = await sign_up_account(
-                Path(data["session_path"]),
-                data["phone"],
-                phone_code_hash,
-                config.telegram_api_id,
-                config.telegram_api_hash,
-                data["runtime"],
-            )
-        except Exception as exc:
-            await state.clear()
-            await message.answer(f"Регистрация нового аккаунта не удалась: {exc}", reply_markup=accounts_menu())
-            return
     except SessionPasswordNeededError:
         await state.update_data(code=code)
         await state.set_state(AddByCode.waiting_twofa)
