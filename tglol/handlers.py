@@ -249,6 +249,19 @@ def _code_request_needs_email(request) -> bool:
     return request.delivery_type == "SentCodeTypeSetUpEmailRequired"
 
 
+def _friendly_code_error(exc: Exception) -> str:
+    text = str(exc)
+    if "all available options" in text or "were already used" in text:
+        return (
+            "Telegram не дал SMS/звонок/email для этого номера.\n\n"
+            "Даже если SIM сейчас твоя, у Telegram номер может числиться как уже занятый "
+            "или привязанный к старой активной сессии. Попробуй другой номер или подожди."
+        )
+    if "PHONE_CODE_HASH" in text.upper() or "phone_code_hash" in text:
+        return "Кодовый запрос устарел или не подходит для этого действия. Начни регистрацию заново."
+    return f"Telegram вернул ошибку: {escape(text)}"
+
+
 def _normalize_email(raw: str) -> str | None:
     email = (raw or "").strip()
     if not email or "@" not in email or "." not in email.rsplit("@", 1)[-1]:
@@ -637,7 +650,7 @@ async def add_by_code_digit(callback: CallbackQuery, state: FSMContext, config: 
             )
         except Exception as exc:
             await callback.answer("Telegram не дал другой способ.", show_alert=True)
-            await callback.message.answer(f"Не удалось запросить другой способ: {escape(str(exc))}")
+            await callback.message.answer(_friendly_code_error(exc))
             return
 
         await state.update_data(
