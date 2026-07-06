@@ -457,21 +457,14 @@ async def add_by_code_phone(message: Message, state: FSMContext, config: Config)
         await state.clear()
         await message.answer("Сессия уже авторизована, но Telegram не вернул данные аккаунта.", reply_markup=accounts_menu())
         return
-    if code_request.delivery_type == "SentCodeTypeApp":
-        await state.clear()
-        await message.answer(
-            (
-                "Telegram отправил код в уже существующее приложение аккаунта.\n\n"
-                "Для авторегистрации это значит, что номер не чистый или уже занят. "
-                "Возьми другой номер."
-            ),
-            reply_markup=accounts_menu(),
-        )
-        return
-    if code_request.delivery_type == "SentCodeTypeSetUpEmailRequired":
+    if code_request.delivery_type in {"SentCodeTypeSetUpEmailRequired", "SentCodeTypeApp"}:
         await state.set_state(AddByCode.waiting_email)
         await message.answer(
-            "Telegram просит указать email для регистрации.\n\nОтправь email, на который придет код подтверждения."
+            (
+                "Telegram просит указать email для регистрации.\n\n"
+                f"Raw type: {code_request.delivery_type}\n\n"
+                "Отправь email, на который придет код подтверждения."
+            )
         )
         return
 
