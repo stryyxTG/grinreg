@@ -24,7 +24,7 @@ ACCOUNTS_PER_PAGE = 14
 def accounts_menu() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="Добавить аккаунт", callback_data="accounts:add")
-    builder.button(text="Хранилище", callback_data="accounts:common_sections")
+    builder.button(text="Хранилище", callback_data="accounts:page:common:0:0")
     builder.adjust(1)
     return builder.as_markup()
 
