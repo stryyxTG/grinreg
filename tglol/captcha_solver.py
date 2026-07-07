@@ -16,47 +16,81 @@ class CaptchaSolver:
         self.create_task_url = "https://api.rucaptcha.com/createTask"
         self.get_result_url = "https://api.rucaptcha.com/getTaskResult"
 
+        # Список публичных прокси для теста (можно заменить на свои)
+        self.proxies = [
+            {"type": "http", "host": "45.77.144.123", "port": 80},
+            {"type": "http", "host": "209.126.98.78", "port": 80},
+            {"type": "http", "host": "162.243.167.173", "port": 80},
+            {"type": "http", "host": "104.236.248.123", "port": 80},
+        ]
+
     async def solve_recaptcha_v2(
         self,
         sitekey: str,
         page_url: str = "https://web.telegram.org",
-        timeout: int = 240,
+        timeout: int = 300,
+    ) -> str:
+        """
+        Решает reCAPTCHA v2 через RuCaptcha с перебором методов и прокси.
+        """
+        # Сначала пробуем без прокси
+        try:
+            logger.info("Пробую решить без прокси...")
+            return await self._solve_with_proxy(sitekey, page_url, timeout, proxy=None)
+        except Exception as e:
+            logger.warning(f"Без прокси не сработало: {e}")
+
+        # Пробуем с разными прокси
+        for proxy in self.proxies:
+            try:
+                logger.info(f"Пробую с прокси: {proxy['host']}:{proxy['port']}")
+                return await self._solve_with_proxy(sitekey, page_url, timeout, proxy=proxy)
+            except Exception as e:
+                logger.warning(f"С прокси {proxy['host']}:{proxy['port']} не сработало: {e}")
+                await asyncio.sleep(2)
+
+        raise Exception("Не удалось решить капчу ни с одним прокси")
+
+    async def _solve_with_proxy(
+        self,
+        sitekey: str,
+        page_url: str,
+        timeout: int,
+        proxy: dict | None,
     ) -> str:
         async with aiohttp.ClientSession() as session:
-            # Используем параметры, максимально похожие на реального пользователя
-            user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-            
-            # Генерируем реалистичные cookie
-            cookies = (
-                "tg_web_session=; "
-                "stel_web_auth=; "
-                f"_ga=GA1.2.{random.randint(100000, 999999)}.{int(time.time())}; "
-                f"_gid=GA1.2.{random.randint(100000, 999999)}.{int(time.time())}; "
-                "device_id=; "
-                "ip_country=; "
-                "lang=en; "
-                "theme=dark; "
-                "webm=1; "
-                "webp=1"
-            )
+            # Генерируем реалистичный User-Agent
+            user_agent = random.choice([
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            ])
+
+            # Формируем задачу
+            task_data = {
+                "type": "RecaptchaV2Task" if proxy else "RecaptchaV2TaskProxyless",
+                "websiteURL": page_url,
+                "websiteKey": sitekey,
+                "isInvisible": False,
+                "userAgent": user_agent,
+                "cookies": f"tg_web_session=; stel_web_auth=; _ga=GA1.2.{random.randint(100000, 999999)}.{int(time.time())}",
+            }
+
+            if proxy:
+                task_data.update({
+                    "proxyType": proxy["type"],
+                    "proxyAddress": proxy["host"],
+                    "proxyPort": int(proxy["port"]),
+                })
 
             task_payload = {
                 "clientKey": self.api_key,
-                "task": {
-                    "type": "RecaptchaV2TaskProxyless",
-                    "websiteURL": page_url,
-                    "websiteKey": sitekey,
-                    "isInvisible": False,
-                    "userAgent": user_agent,
-                    "cookies": cookies,
-                    # Добавляем дополнительные параметры
-                    "recaptchaDataSValue": "some_value",  # для некоторых версий
-                },
+                "task": task_data,
                 "softId": 3898,
-                "languagePool": "en",  # английский язык
+                "languagePool": "en",
             }
 
-            logger.info(f"Отправка капчи с полной эмуляцией браузера...")
+            logger.info(f"Отправка капчи в RuCaptcha (с прокси: {proxy is not None})")
 
             async with session.post(self.create_task_url, json=task_payload) as resp:
                 result = await resp.json()
@@ -100,6 +134,8 @@ class CaptchaSolver:
                         raise Exception("Нет токена")
 
                     elif status == "processing":
+                        if attempts % 5 == 0:
+                            logger.info(f"Ожидаем... попытка {attempts}")
                         continue
                     else:
                         raise Exception(f"Неизвестный статус: {status}")
