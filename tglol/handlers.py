@@ -261,8 +261,11 @@ def _code_request_is_blocked(request) -> bool:
 def _friendly_code_error(exc: Exception) -> str:
     text = str(exc)
     if isinstance(exc, TelegramCaptchaRequired) or "RECAPTCHA_CHECK" in text:
+        site_key = exc.site_key if isinstance(exc, TelegramCaptchaRequired) else None
+        site_key_line = f"\nSiteKey: <code>{escape(site_key)}</code>" if site_key else ""
         return (
             "Telegram запросил reCAPTCHA для регистрации этого номера.\n\n"
+            f"Page URL: <code>https://telegram.org</code>{site_key_line}\n\n"
             "Через обычный API-клиент бот не может безопасно показать или пройти эту проверку. "
             "Попробуй позже, другой номер/IP, либо регистрируй номер в официальном Telegram-приложении."
         )
