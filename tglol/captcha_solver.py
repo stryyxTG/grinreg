@@ -16,12 +16,9 @@ class CaptchaSolver:
         self.create_task_url = "https://api.rucaptcha.com/createTask"
         self.get_result_url = "https://api.rucaptcha.com/getTaskResult"
 
-        # Список публичных прокси для теста (можно заменить на свои)
+        # ТВОЙ ПРОКСИ (вставлен)
         self.proxies = [
-            {"type": "http", "host": "45.77.144.123", "port": 80},
-            {"type": "http", "host": "209.126.98.78", "port": 80},
-            {"type": "http", "host": "162.243.167.173", "port": 80},
-            {"type": "http", "host": "104.236.248.123", "port": 80},
+            {"type": "socks5", "host": "45.86.3.147", "port": 14893, "username": "user335792", "password": "9etya2"},
         ]
 
     async def solve_recaptcha_v2(
@@ -30,26 +27,23 @@ class CaptchaSolver:
         page_url: str = "https://web.telegram.org",
         timeout: int = 300,
     ) -> str:
-        """
-        Решает reCAPTCHA v2 через RuCaptcha с перебором методов и прокси.
-        """
-        # Сначала пробуем без прокси
-        try:
-            logger.info("Пробую решить без прокси...")
-            return await self._solve_with_proxy(sitekey, page_url, timeout, proxy=None)
-        except Exception as e:
-            logger.warning(f"Без прокси не сработало: {e}")
-
-        # Пробуем с разными прокси
+        # Сначала пробуем с твоим прокси
         for proxy in self.proxies:
             try:
                 logger.info(f"Пробую с прокси: {proxy['host']}:{proxy['port']}")
                 return await self._solve_with_proxy(sitekey, page_url, timeout, proxy=proxy)
             except Exception as e:
-                logger.warning(f"С прокси {proxy['host']}:{proxy['port']} не сработало: {e}")
+                logger.warning(f"С прокси не сработало: {e}")
                 await asyncio.sleep(2)
 
-        raise Exception("Не удалось решить капчу ни с одним прокси")
+        # Если не сработало — пробуем без прокси
+        try:
+            logger.info("Пробую без прокси...")
+            return await self._solve_with_proxy(sitekey, page_url, timeout, proxy=None)
+        except Exception as e:
+            logger.warning(f"Без прокси не сработало: {e}")
+
+        raise Exception("Не удалось решить капчу")
 
     async def _solve_with_proxy(
         self,
@@ -59,14 +53,12 @@ class CaptchaSolver:
         proxy: dict | None,
     ) -> str:
         async with aiohttp.ClientSession() as session:
-            # Генерируем реалистичный User-Agent
             user_agent = random.choice([
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             ])
 
-            # Формируем задачу
             task_data = {
                 "type": "RecaptchaV2Task" if proxy else "RecaptchaV2TaskProxyless",
                 "websiteURL": page_url,
@@ -82,6 +74,9 @@ class CaptchaSolver:
                     "proxyAddress": proxy["host"],
                     "proxyPort": int(proxy["port"]),
                 })
+                if proxy.get("username") and proxy.get("password"):
+                    task_data["proxyLogin"] = proxy["username"]
+                    task_data["proxyPassword"] = proxy["password"]
 
             task_payload = {
                 "clientKey": self.api_key,
