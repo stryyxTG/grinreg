@@ -9,6 +9,7 @@ import secrets
 import shutil
 import zipfile
 
+from tglol.webapp_handler import webapp_register_button, handle_webapp_data
 from aiogram import BaseMiddleware, F, Router
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
@@ -1071,3 +1072,26 @@ async def confirm_delete_all_accounts(callback: CallbackQuery, config: Config) -
         reply_markup=accounts_menu(),
     )
     await callback.answer("Хранилище очищено.")
+
+@router.message(F.text == "/register_webapp")
+async def register_webapp(message: Message):
+    """Отправляет кнопку с мини-приложением"""
+    await message.answer(
+        "📱 Нажми кнопку ниже, чтобы зарегистрировать аккаунт через мини-приложение.\n\n"
+        "Вы сами пройдёте капчу в Telegram Web.",
+        reply_markup=webapp_register_button()
+    )
+
+    @router.message(F.web_app_data)
+    async def webapp_data_handler(message: Message, state: FSMContext, config: Config):
+        if not message.web_app_data:
+            return
+
+        result = await handle_webapp_data(message.web_app_data.data, message, config, state)
+        if result and result.get('action'):
+            # Отправляем ответ обратно в WebApp (через ответное сообщение)
+            import json
+            await message.answer(
+                json.dumps(result),
+                parse_mode=None
+            )

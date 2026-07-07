@@ -5,7 +5,7 @@ from math import ceil
 
 from aiogram.types import InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-
+from aiogram.types import WebAppInfo
 
 ACCOUNTS_PER_PAGE = 14
 
@@ -117,3 +117,13 @@ def confirm_delete_all_accounts_menu() -> InlineKeyboardMarkup:
     builder.button(text="Отмена", callback_data="accounts:page:storage:0:0")
     builder.adjust(1)
     return builder.as_markup()
+
+def webapp_register_kb(webapp_url: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardBuilder(
+                text="📱 Зарегистрировать аккаунт",
+                web_app=WebAppInfo(url=webapp_url)
+            )]
+        ]
+    )
