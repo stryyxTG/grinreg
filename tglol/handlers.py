@@ -15,12 +15,10 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, FSInputFile, Message, TelegramObject
 from telethon.errors import SessionPasswordNeededError
 
-from tglol.captcha_solver import CaptchaSolver
 from tglol.config import Config
 from tglol.db import (
     add_account,
     add_captcha_request,
-    clear_captcha_cooldown,
     count_accounts,
     delete_account_row,
     delete_all_accounts,
@@ -425,7 +423,6 @@ async def _finalize_code_login_impl(
         reply_markup=accounts_menu(),
     )
 
-
 @router.message(F.text == "/captcha_stats")
 async def captcha_stats(message: Message, config: Config) -> None:
     stats = get_captcha_stats(config)
@@ -436,22 +433,6 @@ async def captcha_stats(message: Message, config: Config) -> None:
         f"Всего запросов: {stats['total']}",
         parse_mode="HTML",
     )
-
-
-@router.message(F.text.startswith("/clear_captcha "))
-async def clear_captcha(message: Message, config: Config) -> None:
-    """Команда для админа: сброс cooldown для номера"""
-    parts = message.text.split(maxsplit=1)
-    if len(parts) < 2:
-        await message.answer("Использование: /clear_captcha +79001234567")
-        return
-    phone = _normalize_login_phone(parts[1])
-    if not phone:
-        await message.answer("Некорректный номер. Используйте формат: +79001234567")
-        return
-    clear_captcha_cooldown(config, phone)
-    await message.answer(f"✅ Cooldown сброшен для номера {phone}")
-
 
 @router.callback_query(F.data == "noop")
 async def noop(callback: CallbackQuery) -> None:
@@ -466,4 +447,579 @@ async def start(message: Message, state: FSMContext) -> None:
 
 @router.callback_query(F.data == "accounts:menu")
 async def show_accounts_menu(callback: CallbackQuery, state: FSMContext) -> None:
-    await state.clear
+    await state.clear()
+    await callback.message.edit_text("Аккаунты", reply_markup=accounts_menu())
+    await callback.answer()
+
+
+@router.message(F.text == "/cancel")
+async def cancel(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    await message.answer("Отменено.", reply_markup=accounts_menu())
+
+
+@router.callback_query(F.data == "accounts:register")
+async def add_by_code_start(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.set_state(AddByCode.waiting_phone)
+    await callback.message.edit_text(
+        "Отправь номер телефона.\n\nМожно с плюсом или без него, например:\n+15074486037\n15074486037"
+    )
+    await callback.answer()
+
+
+@router.message(AddByCode.waiting_phone)
+async def add_by_code_phone(message: Message, state: FSMContext, config: Config) -> None:
+    phone = _normalize_login_phone(message.text or "")
+    if not phone:
+        await message.answer("Номер некорректный. Отправь номер с кодом страны, например: +15074486037")
+        return
+
+    if is_phone_on_captcha_cooldown(config, phone):
+        await message.answer(
+            f"⏳ Этот номер на капче. Подождите {config.captcha_cooldown_minutes} минут или попробуйте другой номер.",
+            reply_markup=accounts_menu(),
+        )
+        return
+
+    runtime = random_android_runtime()
+    admin_id = message.from_user.id if message.from_user else 0
+    login_id = secrets.token_hex(4)
+    phone_digits = phone.lstrip("+")
+    session_path = unique_path(config.temp_dir, f"temp_session_{admin_id}_{phone_digits}_{login_id}.session")
+
+    try:
+        code_request = await send_code(
+            session_path,
+            phone,
+            config.telegram_api_id,
+            config.telegram_api_hash,
+            runtime,
+        )
+    except TelegramCaptchaRequired as exc:
+        add_captcha_request(config, phone, exc.site_key)
+        set_captcha_cooldown(config, phone, config.captcha_cooldown_minutes)
+
+        await state.clear()
+        await message.answer(
+            f"❌ Telegram запросил капчу для номера {phone}\n\n"
+            f"SiteKey: <code>{exc.site_key or 'неизвестен'}</code>\n\n"
+            f"⏳ Номер добавлен в список ожидания. Попробуйте снова через {config.captcha_cooldown_minutes} минут.\n"
+            f"Можно попробовать с другого номера или IP.",
+            reply_markup=accounts_menu(),
+        )
+        return
+    except Exception as exc:
+        await state.clear()
+        await message.answer(f"Не удалось отправить код Telegram:\n{_friendly_code_error(exc)}", reply_markup=accounts_menu())
+        return
+
+    await state.update_data(
+        phone=phone,
+        phone_code_hash=code_request.phone_code_hash,
+        session_path=str(session_path),
+        login_id=login_id,
+        admin_id=admin_id,
+        runtime=runtime,
+        login_started_at=utc_now_iso(),
+        code="",
+    )
+    if code_request.already_authorized and code_request.user:
+        await finalize_code_login(message, state, config, twofa=None, user=code_request.user)
+        return
+    if code_request.already_authorized:
+        await state.clear()
+        await message.answer("Сессия уже авторизована, но Telegram не вернул данные аккаунта.", reply_markup=accounts_menu())
+        return
+    if _code_request_is_blocked(code_request):
+        await state.clear()
+        await message.answer(_code_request_text(code_request), reply_markup=accounts_menu())
+        return
+    if _code_request_needs_email(code_request):
+        await state.set_state(AddByCode.waiting_email)
+        await message.answer(
+            (
+                "Telegram просит указать email для регистрации.\n\n"
+                f"Raw type: {code_request.delivery_type}\n\n"
+                "Отправь email, на который придет код подтверждения."
+            )
+        )
+        return
+
+    info_text = _code_request_text(code_request)
+    await state.update_data(code_info_text=info_text)
+    await state.set_state(AddByCode.waiting_code)
+    await message.answer(_code_entry_text(info_text, ""), reply_markup=digit_code_keyboard())
+
+
+@router.message(AddByCode.waiting_email)
+async def add_by_code_email(message: Message, state: FSMContext, config: Config) -> None:
+    email = _normalize_email(message.text or "")
+    if not email:
+        await message.answer("Email выглядит некорректно. Отправь email ещё раз.")
+        return
+    await _start_email_setup(message, state, config, email)
+
+
+async def _start_email_setup(message: Message, state: FSMContext, config: Config, email: str) -> None:
+    data = await state.get_data()
+    phone_code_hash = data.get("phone_code_hash")
+    if not phone_code_hash:
+        await state.clear()
+        await message.answer("Не найден phone_code_hash. Начни регистрацию заново.", reply_markup=accounts_menu())
+        return
+
+    try:
+        email_request = await send_login_email_code(
+            Path(data["session_path"]),
+            data["phone"],
+            phone_code_hash,
+            email,
+            config.telegram_api_id,
+            config.telegram_api_hash,
+            data["runtime"],
+        )
+    except Exception as exc:
+        await message.answer(f"Не удалось отправить код на email: {exc}\nОтправь другой email или /cancel.")
+        return
+
+    await state.update_data(email=email, email_code_length=email_request.code_length)
+    await state.set_state(AddByCode.waiting_email_code)
+    await message.answer(
+        (
+            f"Код отправлен на email: <code>{escape(email_request.email_pattern)}</code>\n"
+            f"Длина кода: {email_request.code_length}\n\n"
+            "Отправь код из письма одним сообщением."
+        )
+    )
+
+
+@router.message(AddByCode.waiting_email_code)
+async def add_by_code_email_code(message: Message, state: FSMContext, config: Config) -> None:
+    email_code = _normalize_login_code(message.text or "")
+    if not email_code:
+        await message.answer("Код с email пустой. Отправь код ещё раз.")
+        return
+
+    data = await state.get_data()
+    phone_code_hash = data.get("phone_code_hash")
+    if not phone_code_hash:
+        await state.clear()
+        await message.answer("Не найден phone_code_hash. Начни регистрацию заново.", reply_markup=accounts_menu())
+        return
+
+    expected_length = data.get("email_code_length")
+    if expected_length and len(email_code) != int(expected_length):
+        await message.answer(f"Код с email должен быть длиной {expected_length}. Отправь код ещё раз.")
+        return
+
+    try:
+        code_request = await verify_login_email_code(
+            Path(data["session_path"]),
+            data["phone"],
+            phone_code_hash,
+            email_code,
+            config.telegram_api_id,
+            config.telegram_api_hash,
+            data["runtime"],
+        )
+    except Exception as exc:
+        await message.answer(f"Код с email не подошёл: {exc}\nОтправь код ещё раз или /cancel.")
+        return
+
+    await state.update_data(
+        phone_code_hash=code_request.phone_code_hash,
+        code="",
+        code_info_text=_code_request_text(code_request),
+    )
+    if _code_request_is_blocked(code_request):
+        await state.clear()
+        await message.answer(_code_request_text(code_request), reply_markup=accounts_menu())
+        return
+    if _code_request_needs_email(code_request):
+        await state.set_state(AddByCode.waiting_email)
+        await message.answer(
+            (
+                "Telegram снова просит указать email для регистрации.\n\n"
+                f"Raw type: {code_request.delivery_type}\n\n"
+                "Отправь email, на который придет код подтверждения."
+            )
+        )
+        return
+
+    info_text = _code_request_text(code_request)
+    await state.update_data(code_info_text=info_text)
+    await state.set_state(AddByCode.waiting_code)
+    await message.answer(_code_entry_text(info_text, ""), reply_markup=digit_code_keyboard())
+
+
+@router.message(AddByCode.waiting_code)
+async def add_by_code_message_code(message: Message, state: FSMContext, config: Config) -> None:
+    await complete_code(message, state, config, _normalize_login_code(message.text or ""))
+
+
+@router.callback_query(AddByCode.waiting_code, F.data.startswith("code:"))
+async def add_by_code_digit(callback: CallbackQuery, state: FSMContext, config: Config) -> None:
+    data = await state.get_data()
+    code = data.get("code", "")
+    info_text = data.get("code_info_text", "Код отправлен в Telegram. Введите код кнопками или одним сообщением.")
+
+    if callback.data.startswith("code:digit:"):
+        if len(code) >= 8:
+            await callback.answer("Максимум 8 цифр.")
+            return
+        code += callback.data.rsplit(":", 1)[-1]
+        await state.update_data(code=code)
+        await callback.message.edit_text(_code_entry_text(info_text, code), reply_markup=digit_code_keyboard())
+        await callback.answer()
+        return
+
+    if callback.data == "code:clear":
+        await state.update_data(code="")
+        await callback.message.edit_text(_code_entry_text(info_text, ""), reply_markup=digit_code_keyboard())
+        await callback.answer("Код очищен.")
+        return
+
+    if callback.data == "code:backspace":
+        code = code[:-1]
+        await state.update_data(code=code)
+        await callback.message.edit_text(_code_entry_text(info_text, code), reply_markup=digit_code_keyboard())
+        await callback.answer()
+        return
+
+    if callback.data == "code:done":
+        await callback.answer()
+        await complete_code(callback.message, state, config, code)
+        return
+
+    if callback.data == "code:resend":
+        data = await state.get_data()
+        phone_code_hash = data.get("phone_code_hash")
+        if not phone_code_hash:
+            await callback.answer("Нет phone_code_hash. Начни регистрацию заново.", show_alert=True)
+            return
+        try:
+            code_request = await resend_code(
+                Path(data["session_path"]),
+                data["phone"],
+                phone_code_hash,
+                config.telegram_api_id,
+                config.telegram_api_hash,
+                data["runtime"],
+            )
+        except Exception as exc:
+            await callback.answer("Telegram не дал другой способ.", show_alert=True)
+            await callback.message.answer(_friendly_code_error(exc))
+            return
+
+        await state.update_data(
+            phone_code_hash=code_request.phone_code_hash,
+            code="",
+            code_info_text=_code_request_text(code_request),
+        )
+        if _code_request_is_blocked(code_request):
+            await state.clear()
+            await callback.message.answer(_code_request_text(code_request), reply_markup=accounts_menu())
+            await callback.answer()
+            return
+        if _code_request_needs_email(code_request):
+            await state.set_state(AddByCode.waiting_email)
+            await callback.message.answer(
+                (
+                    "Telegram просит указать email для регистрации.\n\n"
+                    f"Raw type: {code_request.delivery_type}\n\n"
+                    "Отправь email, на который придет код подтверждения."
+                )
+            )
+        else:
+            await callback.message.edit_text(_code_entry_text(_code_request_text(code_request), ""), reply_markup=digit_code_keyboard())
+        await callback.answer("Способ обновлен.")
+
+
+async def complete_code(message: Message, state: FSMContext, config: Config, code: str) -> None:
+    code = _normalize_login_code(code)
+    if not code:
+        await message.answer("Код пустой.")
+        return
+    if not 5 <= len(code) <= 8:
+        await message.answer("Код должен быть длиной 5-8 цифр. Введи заново.")
+        return
+
+    data = await state.get_data()
+    phone_code_hash = data.get("phone_code_hash")
+    if not phone_code_hash:
+        await message.answer("Не найден phone_code_hash. Запроси код еще раз.", reply_markup=digit_code_keyboard())
+        return
+    try:
+        user = await sign_in_or_sign_up(
+            Path(data["session_path"]),
+            data["phone"],
+            code,
+            phone_code_hash,
+            config.telegram_api_id,
+            config.telegram_api_hash,
+            data["runtime"],
+        )
+    except SessionPasswordNeededError:
+        await state.update_data(code=code)
+        await state.set_state(AddByCode.waiting_twofa)
+        await message.answer("Нужен пароль 2FA. Отправь пароль.")
+        return
+    except Exception as exc:
+        await state.update_data(code="")
+        await message.answer(f"Вход не удался: {exc}\nВведи код заново.", reply_markup=digit_code_keyboard())
+        return
+
+    await finalize_code_login(message, state, config, twofa=None, user=user)
+
+
+@router.message(AddByCode.waiting_twofa)
+async def add_by_code_twofa(message: Message, state: FSMContext, config: Config) -> None:
+    password = message.text or ""
+    data = await state.get_data()
+    try:
+        user = await sign_in_password(
+            Path(data["session_path"]),
+            password,
+            config.telegram_api_id,
+            config.telegram_api_hash,
+            data["runtime"],
+        )
+    except Exception as exc:
+        await message.answer(f"Проверка 2FA не прошла: {exc}")
+        return
+    await finalize_code_login(message, state, config, twofa=password, user=user)
+
+
+@router.callback_query(F.data.startswith("accounts:page:"))
+async def show_accounts_page(callback: CallbackQuery, state: FSMContext, config: Config) -> None:
+    await state.clear()
+    _, _, origin, raw_ref, raw_page = callback.data.split(":", 4)
+    if not _origin_is_valid(origin):
+        await callback.answer("Раздел больше недоступен.", show_alert=True)
+        return
+    await _show_storage_page(callback, config, int(raw_ref), int(raw_page))
+
+
+@router.callback_query(F.data.startswith("accounts:phone:"))
+async def send_account_phone(callback: CallbackQuery, config: Config) -> None:
+    account_id = int(callback.data.rsplit(":", 1)[-1])
+    account = get_account(config, account_id)
+    if not account:
+        await callback.answer("Аккаунт не найден.", show_alert=True)
+        return
+    if not account.phone:
+        await callback.answer("Номер не указан.", show_alert=True)
+        return
+    await callback.message.answer(_copyable(account.phone))
+    await callback.answer("Номер отправлен.")
+
+
+@router.callback_query(F.data.startswith("account:check_ask:"))
+async def ask_check_account(callback: CallbackQuery, config: Config) -> None:
+    _, _, raw_account_id, origin, raw_ref, raw_page = callback.data.split(":", 5)
+    if not _origin_is_valid(origin):
+        await callback.answer("Раздел больше недоступен.", show_alert=True)
+        return
+    account = get_account(config, int(raw_account_id))
+    if not account:
+        await callback.answer("Аккаунт не найден.", show_alert=True)
+        return
+    await callback.message.edit_text(
+        "Проверить аккаунт?\n\nБот подключится к текущей session и проверит авторизацию. Новый код запрашиваться не будет.",
+        reply_markup=confirm_check_account_menu(account.id, origin, int(raw_ref), int(raw_page)),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("account:check_confirm:"))
+async def confirm_check_account(callback: CallbackQuery, config: Config) -> None:
+    _, _, raw_account_id, origin, raw_ref, raw_page = callback.data.split(":", 5)
+    if not _origin_is_valid(origin):
+        await callback.answer("Раздел больше недоступен.", show_alert=True)
+        return
+    account_id = int(raw_account_id)
+    account = get_account(config, account_id)
+    if not account:
+        await callback.answer("Аккаунт не найден.", show_alert=True)
+        return
+
+    session_path = Path(account.session_path)
+    if not session_path.exists():
+        update_account_status(config, account_id, "missing_file")
+        account = get_account(config, account_id)
+        await callback.message.edit_text(
+            _account_detail_text(account),
+            reply_markup=account_detail_menu(account.id, origin=origin, ref_id=int(raw_ref), page=int(raw_page)),
+        )
+        await callback.answer("Session файл не найден.", show_alert=True)
+        return
+
+    try:
+        api_id, api_hash, runtime = _account_connection_params(account, config)
+        status, user, note = await inspect_session(session_path, api_id, api_hash, runtime)
+    except Exception as exc:
+        status = "error"
+        user = None
+        note = str(exc)
+
+    update_account_status(config, account_id, status)
+    account = get_account(config, account_id)
+    text = _account_detail_text(account)
+    if status == "active" and user:
+        fields = user_fields(user)
+        text += (
+            "\n\nПроверка: <b>живой</b>"
+            f"\nTelegram ID: {_copyable(fields['telegram_user_id'])}"
+            f"\nUsername: {_username(fields['username'])}"
+        )
+    elif status == "unauthorized":
+        text += "\n\nПроверка: <b>не авторизован</b>"
+    elif status == "empty":
+        text += "\n\nПроверка: <b>Telegram не вернул данные аккаунта</b>"
+    elif status == "twofa_required":
+        text += "\n\nПроверка: <b>требуется 2FA</b>"
+    else:
+        text += f"\n\nПроверка: <b>ошибка</b>\n{_text(note)}"
+
+    await callback.message.edit_text(
+        text,
+        reply_markup=account_detail_menu(account.id, origin=origin, ref_id=int(raw_ref), page=int(raw_page)),
+    )
+    await callback.answer("Проверка завершена.")
+
+
+@router.callback_query(F.data.startswith("account:open:"))
+async def show_account_detail_callback(callback: CallbackQuery, config: Config) -> None:
+    _, _, raw_id, origin, raw_ref, raw_page = callback.data.split(":", 5)
+    if not _origin_is_valid(origin):
+        await callback.answer("Раздел больше недоступен.", show_alert=True)
+        return
+    account = get_account(config, int(raw_id))
+    if not account:
+        await callback.answer("Аккаунт не найден.", show_alert=True)
+        return
+    await callback.message.edit_text(
+        _account_detail_text(account),
+        reply_markup=account_detail_menu(account.id, origin=origin, ref_id=int(raw_ref), page=int(raw_page)),
+    )
+    await callback.answer()
+
+
+@router.message(F.text.regexp(r"^/account_\d+$"))
+async def show_account_detail_message(message: Message, config: Config) -> None:
+    account_id = int((message.text or "").rsplit("_", 1)[-1])
+    account = get_account(config, account_id)
+    if not account:
+        await message.answer("Аккаунт не найден.")
+        return
+    await message.answer(
+        _account_detail_text(account),
+        reply_markup=account_detail_menu(account.id, origin="storage", ref_id=0, page=0),
+    )
+
+
+@router.callback_query(F.data.startswith("accounts:file:"))
+async def download_account_file(callback: CallbackQuery, config: Config) -> None:
+    _, _, file_type, raw_id = callback.data.split(":", 3)
+    account = get_account(config, int(raw_id))
+    if not account:
+        await callback.answer("Аккаунт не найден.", show_alert=True)
+        return
+
+    path = Path(account.session_path) if file_type == "session" else Path(account.json_original_path or account.json_effective_path or "")
+    if not path.exists():
+        await callback.answer("Файл не найден.", show_alert=True)
+        return
+
+    await callback.message.answer_document(FSInputFile(path))
+    await callback.answer()
+
+
+@router.callback_query(F.data == "accounts:zip_all")
+async def download_storage_zip(callback: CallbackQuery, config: Config) -> None:
+    accounts = list_accounts_by_scope(config)
+    if not accounts:
+        await callback.answer("В хранилище нет аккаунтов.", show_alert=True)
+        return
+    zip_path, files_count = _make_accounts_zip(config, accounts)
+    if files_count == 0:
+        try:
+            zip_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        await callback.answer("Файлы для архива не найдены.", show_alert=True)
+        return
+    await callback.message.answer_document(
+        FSInputFile(zip_path),
+        caption=f"Хранилище: {len(accounts)} аккаунтов, {files_count} файлов.",
+    )
+    try:
+        zip_path.unlink(missing_ok=True)
+    except OSError:
+        pass
+    await callback.answer("ZIP сформирован.")
+
+
+@router.callback_query(F.data.startswith("account:delete_ask:"))
+async def ask_delete_account(callback: CallbackQuery, config: Config) -> None:
+    _, _, raw_account_id, origin, raw_ref, raw_page = callback.data.split(":", 5)
+    if not _origin_is_valid(origin):
+        await callback.answer("Удаление здесь недоступно.", show_alert=True)
+        return
+    account = get_account(config, int(raw_account_id))
+    if not account:
+        await callback.answer("Аккаунт не найден.", show_alert=True)
+        return
+    await callback.message.edit_text(
+        "ВЫ УВЕРЕНЫ ЧТО ХОТИТЕ УДАЛИТЬ АККАУНТ И ЕГО ФАЙЛЫ С СЕРВЕРА?",
+        reply_markup=confirm_delete_account_menu(account.id, origin, int(raw_ref), int(raw_page)),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("account:delete_confirm:"))
+async def confirm_delete_account(callback: CallbackQuery, config: Config) -> None:
+    _, _, raw_account_id, origin, _raw_ref, _raw_page = callback.data.split(":", 5)
+    if not _origin_is_valid(origin):
+        await callback.answer("Удаление здесь недоступно.", show_alert=True)
+        return
+    account = get_account(config, int(raw_account_id))
+    if not account:
+        await callback.answer("Аккаунт не найден.", show_alert=True)
+        return
+    removed_files = _delete_local_account_files(config, [account])
+    delete_account_row(config, account.id)
+    total = count_accounts(config)
+    await callback.message.edit_text(
+        f"Аккаунт #{account.id} удален из бота.\nФайлов удалено с сервера: {removed_files}\n\nХранилище: {total}",
+        reply_markup=accounts_menu(),
+    )
+    await callback.answer("Удалено.")
+
+
+@router.callback_query(F.data == "accounts:delete_all_ask")
+async def ask_delete_all_accounts(callback: CallbackQuery, config: Config) -> None:
+    total = count_accounts(config)
+    if not total:
+        await callback.answer("В хранилище нет аккаунтов.", show_alert=True)
+        return
+    await callback.message.edit_text(
+        f"ВЫ УВЕРЕНЫ ЧТО ХОТИТЕ УДАЛИТЬ ВСЕ ХРАНИЛИЩЕ?\nАккаунтов: {total}\nФайлы будут удалены только с сервера.",
+        reply_markup=confirm_delete_all_accounts_menu(),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "accounts:delete_all_confirm")
+async def confirm_delete_all_accounts(callback: CallbackQuery, config: Config) -> None:
+    accounts = list_accounts_by_scope(config)
+    if not accounts:
+        await callback.answer("В хранилище нет аккаунтов.", show_alert=True)
+        return
+    removed_files = _delete_local_account_files(config, accounts)
+    removed_rows = delete_all_accounts(config)
+    await callback.message.edit_text(
+        f"Хранилище очищено.\nАккаунтов удалено из бота: {removed_rows}\nФайлов удалено с сервера: {removed_files}",
+        reply_markup=accounts_menu(),
+    )
+    await callback.answer("Хранилище очищено.")
