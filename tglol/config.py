@@ -60,7 +60,6 @@ def load_config() -> Config:
 
     data_dir = Path(os.getenv("DATA_DIR", "storage"))
     
-    # Парсим captcha_api_key - если не задан или плейсхолдер, то None
     captcha_api_key_raw = os.getenv("CAPTCHA_API_KEY", "").strip()
     if captcha_api_key_raw and not captcha_api_key_raw.startswith("PUT_") and captcha_api_key_raw != "ваш_ключ_от_2captcha_или_capsolver":
         captcha_api_key = captcha_api_key_raw

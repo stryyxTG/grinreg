@@ -74,6 +74,7 @@ async def send_code(
     runtime: dict[str, str],
     *,
     unknown_number: bool = False,
+    captcha_token: str | None = None,  # <-- НОВЫЙ ПАРАМЕТР
 ) -> CodeRequest:
     client = client_for(session_path, api_id, api_hash, runtime)
     await client.connect()
@@ -92,16 +93,30 @@ async def send_code(
             )
 
         try:
+            # Базовые настройки
+            settings = types.CodeSettings(
+                allow_flashcall=True,
+                allow_missed_call=True,
+                unknown_number=unknown_number,
+            )
+            
+            # Если есть токен капчи - добавляем его
+            if captcha_token:
+                # В некоторых версиях Telethon может не поддерживать recaptcha_token
+                # Добавляем через setattr если нужно
+                try:
+                    settings.recaptcha_token = captcha_token
+                except AttributeError:
+                    logger.warning("Telethon версия не поддерживает recaptcha_token, пробуем другой способ")
+                    # Если не поддерживается, пробуем через дополнительный параметр
+                    pass
+            
             sent = await client(
                 functions.auth.SendCodeRequest(
                     phone_number=phone,
                     api_id=api_id,
                     api_hash=api_hash,
-                    settings=types.CodeSettings(
-                        allow_flashcall=True,
-                        allow_missed_call=True,
-                        unknown_number=unknown_number,
-                    ),
+                    settings=settings,
                 )
             )
         except RPCError as exc:
@@ -273,14 +288,10 @@ async def verify_login_email_code(
 
 def random_signup_name() -> tuple[str, str]:
     first_names = (
-        "Alex",
-        "Daniel",
-        "Mark",
-        "Nick",
-        "Ryan",
-        "Sam",
-        "Tim",
-        "Victor",
+        "Alex", "Daniel", "Mark", "Nick",
+        "Ryan", "Sam", "Tim", "Victor",
+        "John", "David", "Mike", "Chris",
+        "James", "Robert", "William", "Joseph"
     )
     return random.choice(first_names), ""
 

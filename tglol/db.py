@@ -220,7 +220,6 @@ def get_captcha_stats(config: Config) -> dict:
 
 
 def clear_captcha_cooldown(config: Config, phone: str) -> None:
-    """Сбрасывает cooldown для номера (для админа)"""
     with connect(config) as conn:
         conn.execute(
             "UPDATE captcha_requests SET status = 'resolved', cooldown_until = NULL WHERE phone = ? AND status = 'cooldown'",

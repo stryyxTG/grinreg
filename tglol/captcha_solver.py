@@ -28,7 +28,6 @@ class CaptchaSolver:
             return await self._solve_capsolver(sitekey, page_url, timeout)
     
     async def _solve_standard(self, sitekey: str, page_url: str, timeout: int) -> str:
-        """Для 2Captcha и Rucaptcha (совместимые API)"""
         async with aiohttp.ClientSession() as session:
             async with session.post(
                 self.submit_url,
