@@ -259,6 +259,12 @@ def _code_request_is_blocked(request) -> bool:
 
 def _friendly_code_error(exc: Exception) -> str:
     text = str(exc)
+    if "RECAPTCHA_CHECK" in text:
+        return (
+            "Telegram запросил reCAPTCHA для регистрации этого номера.\n\n"
+            "Через обычный API-клиент бот не может безопасно показать или пройти эту проверку. "
+            "Попробуй позже, другой номер/IP, либо регистрируй номер в официальном Telegram-приложении."
+        )
     if "all available options" in text or "were already used" in text:
         return (
             "Telegram не дал SMS/звонок/email для этого номера.\n\n"
@@ -465,7 +471,7 @@ async def add_by_code_phone(message: Message, state: FSMContext, config: Config)
         )
     except Exception as exc:
         await state.clear()
-        await message.answer(f"Не удалось отправить код Telegram: {exc}", reply_markup=accounts_menu())
+        await message.answer(f"Не удалось отправить код Telegram:\n{_friendly_code_error(exc)}", reply_markup=accounts_menu())
         return
 
     await state.update_data(
