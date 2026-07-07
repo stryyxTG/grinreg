@@ -4,11 +4,12 @@ from dataclasses import dataclass
 import logging
 from pathlib import Path
 import random
+import re
 from typing import Any
 
 from telethon import TelegramClient
 from telethon import functions, types
-from telethon.errors import PhoneNumberUnoccupiedError, SessionPasswordNeededError
+from telethon.errors import PhoneNumberUnoccupiedError, RPCError, SessionPasswordNeededError
 from telethon.tl.types import User
 
 
@@ -30,6 +31,17 @@ class CodeRequest:
 class EmailCodeRequest:
     email_pattern: str
     code_length: int
+
+
+class TelegramCaptchaRequired(RuntimeError):
+    def __init__(self, *, site_key: str | None = None) -> None:
+        self.site_key = site_key
+        super().__init__("Telegram requested reCAPTCHA for this registration attempt")
+
+
+def _recaptcha_site_key(error_text: str) -> str | None:
+    match = re.search(r"RECAPTCHA_CHECK_[^_]+__([A-Za-z0-9_-]+)", error_text)
+    return match.group(1) if match else None
 
 
 def client_for(
@@ -79,18 +91,25 @@ async def send_code(
                 user=me,
             )
 
-        sent = await client(
-            functions.auth.SendCodeRequest(
-                phone_number=phone,
-                api_id=api_id,
-                api_hash=api_hash,
-                settings=types.CodeSettings(
-                    allow_flashcall=True,
-                    allow_missed_call=True,
-                    unknown_number=unknown_number,
-                ),
+        try:
+            sent = await client(
+                functions.auth.SendCodeRequest(
+                    phone_number=phone,
+                    api_id=api_id,
+                    api_hash=api_hash,
+                    settings=types.CodeSettings(
+                        allow_flashcall=True,
+                        allow_missed_call=True,
+                        unknown_number=unknown_number,
+                    ),
+                )
             )
-        )
+        except RPCError as exc:
+            error_text = str(exc)
+            if "RECAPTCHA_CHECK" in error_text:
+                logger.warning("Telegram requested reCAPTCHA during send_code: phone=%s", phone)
+                raise TelegramCaptchaRequired(site_key=_recaptcha_site_key(error_text)) from exc
+            raise
         request = code_request_from_sent_code(sent)
         logger.info(
             "Telegram login code requested: phone=%s delivery=%s next=%s timeout=%s length=%s",

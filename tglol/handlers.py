@@ -41,6 +41,7 @@ from tglol.keyboards import (
 from tglol.paths import unique_path
 from tglol.states import AddByCode
 from tglol.telegram_service import (
+    TelegramCaptchaRequired,
     inspect_session,
     resend_code,
     send_code,
@@ -259,7 +260,7 @@ def _code_request_is_blocked(request) -> bool:
 
 def _friendly_code_error(exc: Exception) -> str:
     text = str(exc)
-    if "RECAPTCHA_CHECK" in text:
+    if isinstance(exc, TelegramCaptchaRequired) or "RECAPTCHA_CHECK" in text:
         return (
             "Telegram запросил reCAPTCHA для регистрации этого номера.\n\n"
             "Через обычный API-клиент бот не может безопасно показать или пройти эту проверку. "
@@ -469,6 +470,10 @@ async def add_by_code_phone(message: Message, state: FSMContext, config: Config)
             config.telegram_api_hash,
             runtime,
         )
+    except TelegramCaptchaRequired as exc:
+        await state.clear()
+        await message.answer(_friendly_code_error(exc), reply_markup=accounts_menu())
+        return
     except Exception as exc:
         await state.clear()
         await message.answer(f"Не удалось отправить код Telegram:\n{_friendly_code_error(exc)}", reply_markup=accounts_menu())
