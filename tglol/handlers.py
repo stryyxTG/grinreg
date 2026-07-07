@@ -26,7 +26,7 @@ from tglol.db import (
     list_accounts_by_scope,
     update_account_status,
 )
-from tglol.desktop_profile import generated_account_json, random_iphone_runtime, utc_now_iso
+from tglol.desktop_profile import generated_account_json, random_android_runtime, utc_now_iso
 from tglol.json_utils import load_json, pick_api, runtime_from_json, write_json
 from tglol.keyboards import (
     ACCOUNTS_PER_PAGE,
@@ -450,7 +450,7 @@ async def add_by_code_phone(message: Message, state: FSMContext, config: Config)
         await message.answer("Номер некорректный. Отправь номер с кодом страны, например: +15074486037")
         return
 
-    runtime = random_iphone_runtime()
+    runtime = random_android_runtime()
     admin_id = message.from_user.id if message.from_user else 0
     login_id = secrets.token_hex(4)
     phone_digits = phone.lstrip("+")
@@ -462,7 +462,6 @@ async def add_by_code_phone(message: Message, state: FSMContext, config: Config)
             config.telegram_api_id,
             config.telegram_api_hash,
             runtime,
-            unknown_number=True,
         )
     except Exception as exc:
         await state.clear()

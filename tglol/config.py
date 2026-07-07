@@ -68,5 +68,5 @@ def load_config() -> Config:
         db_path=Path(os.getenv("DB_PATH", data_dir / "bot.sqlite3")),
         default_lang_code=os.getenv("DEFAULT_LANG_CODE", "en"),
         default_system_lang_code=os.getenv("DEFAULT_SYSTEM_LANG_CODE", "en-US"),
-        default_lang_pack=os.getenv("DEFAULT_LANG_PACK", "ios"),
+        default_lang_pack=os.getenv("DEFAULT_LANG_PACK", "android"),
     )

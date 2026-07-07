@@ -64,12 +64,12 @@ def pick_int(data: dict[str, Any], *keys: str) -> int | None:
 
 def runtime_from_json(data: dict[str, Any]) -> dict[str, str]:
     return {
-        "device": pick_str(data, "device", "device_model") or "iPhone 16 Pro",
-        "sdk": pick_str(data, "sdk", "system_version") or "iOS 18.6",
+        "device": pick_str(data, "device", "device_model") or "Google Pixel 10 Pro",
+        "sdk": pick_str(data, "sdk", "system_version") or "Android 16",
         "app_version": pick_str(data, "app_version") or "12.8.1",
         "lang_code": pick_str(data, "lang_code") or "en",
         "system_lang_code": pick_str(data, "system_lang_code") or "en-US",
-        "lang_pack": pick_str(data, "lang_pack") or "ios",
+        "lang_pack": pick_str(data, "lang_pack") or "android",
     }
 
 

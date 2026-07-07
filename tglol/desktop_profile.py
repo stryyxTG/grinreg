@@ -7,24 +7,24 @@ from typing import Any
 from tglol.config import Config
 
 
-IPHONE_DEVICES = [
-    "iPhone 16 Pro Max",
-    "iPhone 16 Pro",
-    "iPhone 16 Plus",
-    "iPhone 16",
-    "iPhone 15 Pro Max",
-    "iPhone 15 Pro",
-    "iPhone 15 Plus",
-    "iPhone 15",
-    "iPhone 14 Pro Max",
-    "iPhone 14 Pro",
-    "iPhone 14 Plus",
-    "iPhone 14",
+ANDROID_DEVICES = [
+    "Google Pixel 10 Pro XL",
+    "Google Pixel 10 Pro",
+    "Google Pixel 10",
+    "Google Pixel 9 Pro XL",
+    "Google Pixel 9 Pro",
+    "Google Pixel 9",
+    "Samsung Galaxy S25 Ultra",
+    "Samsung Galaxy S25+",
+    "Samsung Galaxy S25",
+    "Samsung Galaxy S24 Ultra",
+    "Samsung Galaxy S24+",
+    "Samsung Galaxy S24",
 ]
 
-IOS_VERSIONS = [
-    "iOS 18.6",
-    "iOS 18.5",
+ANDROID_VERSIONS = [
+    "Android 16",
+    "Android 15",
 ]
 
 APP_VERSIONS = [
@@ -33,14 +33,14 @@ APP_VERSIONS = [
 ]
 
 
-def random_iphone_runtime() -> dict[str, str]:
+def random_android_runtime() -> dict[str, str]:
     return {
-        "device": random.choice(IPHONE_DEVICES),
-        "sdk": random.choice(IOS_VERSIONS),
+        "device": random.choice(ANDROID_DEVICES),
+        "sdk": random.choice(ANDROID_VERSIONS),
         "app_version": random.choice(APP_VERSIONS),
         "lang_code": "en",
         "system_lang_code": "en-US",
-        "lang_pack": "ios",
+        "lang_pack": "android",
     }
 
 
@@ -70,7 +70,7 @@ def generated_account_json(
     first_name: str | None = None,
     last_name: str | None = None,
 ) -> dict[str, Any]:
-    runtime = runtime or random_iphone_runtime()
+    runtime = runtime or random_android_runtime()
     return {
         "app_id": config.telegram_api_id,
         "app_hash": config.telegram_api_hash,
