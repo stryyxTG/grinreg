@@ -32,91 +32,117 @@ class CaptchaSolver:
         timeout: int = 300,
     ) -> str:
         async with aiohttp.ClientSession() as session:
-            # Генерируем реалистичный User-Agent
-            user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            # Пробуем разные методы
+            methods = [
+                self._solve_with_type(session, sitekey, page_url, "RecaptchaV2Task", timeout),
+                self._solve_with_type(session, sitekey, page_url, "RecaptchaV2EnterpriseTask", timeout),
+            ]
 
-            # Добавляем cookies (имитация сессии)
-            cookies = (
-                "stel_web_auth=; "
-                "tg_web_session=; "
-                "device_id=; "
-                "ip_country=; "
-                "lang=en; "
-                "theme=dark; "
-                "webm=1; "
-                "webp=1"
-            )
+            for method in methods:
+                try:
+                    return await method
+                except Exception as e:
+                    logger.warning(f"Метод не сработал: {e}")
+                    await asyncio.sleep(3)
 
-            task_data = {
-                "type": "RecaptchaV2Task",
-                "websiteURL": page_url,
-                "websiteKey": sitekey,
-                "isInvisible": False,
-                "proxyType": self.proxy["type"],
-                "proxyAddress": self.proxy["host"],
-                "proxyPort": self.proxy["port"],
-                "proxyLogin": self.proxy["username"],
-                "proxyPassword": self.proxy["password"],
-                "userAgent": user_agent,
-                "cookies": cookies,
-            }
+            raise Exception("Не удалось решить капчу ни одним методом")
 
-            task_payload = {
+    async def _solve_with_type(
+        self,
+        session: aiohttp.ClientSession,
+        sitekey: str,
+        page_url: str,
+        task_type: str,
+        timeout: int,
+    ) -> str:
+        user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+
+        cookies = (
+            "stel_web_auth=; "
+            "tg_web_session=; "
+            "device_id=; "
+            "ip_country=; "
+            "lang=en; "
+            "theme=dark; "
+            "webm=1; "
+            "webp=1"
+        )
+
+        task_data = {
+            "type": task_type,
+            "websiteURL": page_url,
+            "websiteKey": sitekey,
+            "isInvisible": False,
+            "proxyType": self.proxy["type"],
+            "proxyAddress": self.proxy["host"],
+            "proxyPort": self.proxy["port"],
+            "proxyLogin": self.proxy["username"],
+            "proxyPassword": self.proxy["password"],
+            "userAgent": user_agent,
+            "cookies": cookies,
+        }
+
+        # Для Enterprise добавляем параметр enterprise
+        if "Enterprise" in task_type:
+            task_data["enterprise"] = True
+            task_data["apiDomain"] = "google.com"
+
+        task_payload = {
+            "clientKey": self.api_key,
+            "task": task_data,
+            "softId": 3898,
+            "languagePool": "en",
+        }
+
+        logger.info(f"Отправка капчи с методом {task_type}")
+
+        async with session.post(self.create_task_url, json=task_payload) as resp:
+            result = await resp.json()
+            logger.info(f"Ответ createTask ({task_type}): {result}")
+
+            if result.get("errorId", 0) != 0:
+                error_desc = result.get("errorDescription", "Unknown error")
+                raise Exception(f"Ошибка RuCaptcha: {error_desc}")
+
+            task_id = result.get("taskId")
+            if not task_id:
+                raise Exception("RuCaptcha не вернул taskId")
+
+            logger.info(f"Задача создана, taskId: {task_id} ({task_type})")
+
+        start_time = time.time()
+        attempts = 0
+
+        while time.time() - start_time < timeout:
+            await asyncio.sleep(3)
+            attempts += 1
+
+            result_payload = {
                 "clientKey": self.api_key,
-                "task": task_data,
-                "softId": 3898,
-                "languagePool": "en",
+                "taskId": task_id,
             }
 
-            logger.info(f"Отправка капчи через прокси с User-Agent и cookies")
-
-            async with session.post(self.create_task_url, json=task_payload) as resp:
+            async with session.post(self.get_result_url, json=result_payload) as resp:
                 result = await resp.json()
-                logger.info(f"Ответ createTask: {result}")
+                logger.debug(f"Попытка {attempts} ({task_type}): {result}")
 
                 if result.get("errorId", 0) != 0:
                     error_desc = result.get("errorDescription", "Unknown error")
                     raise Exception(f"Ошибка RuCaptcha: {error_desc}")
 
-                task_id = result.get("taskId")
-                if not task_id:
-                    raise Exception("RuCaptcha не вернул taskId")
+                status = result.get("status")
+                if status == "ready":
+                    token = result.get("solution", {}).get("gRecaptchaResponse")
+                    if token:
+                        logger.info(f"✅ Капча решена! ({task_type})")
+                        return token
+                    raise Exception("Нет токена")
 
-                logger.info(f"Задача создана, taskId: {task_id}")
+                elif status == "processing":
+                    if attempts % 5 == 0:
+                        logger.info(f"Ожидаем... попытка {attempts} ({task_type})")
+                    continue
+                else:
+                    raise Exception(f"Неизвестный статус: {status}")
 
-            start_time = time.time()
-            attempts = 0
-
-            while time.time() - start_time < timeout:
-                await asyncio.sleep(3)
-                attempts += 1
-
-                result_payload = {
-                    "clientKey": self.api_key,
-                    "taskId": task_id,
-                }
-
-                async with session.post(self.get_result_url, json=result_payload) as resp:
-                    result = await resp.json()
-                    logger.debug(f"Попытка {attempts}: {result}")
-
-                    if result.get("errorId", 0) != 0:
-                        error_desc = result.get("errorDescription", "Unknown error")
-                        raise Exception(f"Ошибка RuCaptcha: {error_desc}")
-
-                    status = result.get("status")
-                    if status == "ready":
-                        token = result.get("solution", {}).get("gRecaptchaResponse")
-                        if token:
-                            logger.info(f"✅ Капча решена!")
-                            return token
-                        raise Exception("Нет токена")
-
-                    elif status == "processing":
-                        if attempts % 5 == 0:
-                            logger.info(f"Ожидаем... попытка {attempts}")
-                        continue
-                    else:
-                        raise Exception(f"Неизвестный статус: {status}")
-
-            raise TimeoutError(f"Таймаут {timeout}с")
+        raise TimeoutError(f"Таймаут {timeout}с ({task_type})")
