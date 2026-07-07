@@ -486,18 +486,27 @@ async def add_by_code_phone(message: Message, state: FSMContext, config: Config)
             return
 
         try:
-            solving_msg = await message.answer("⏳ Решаю reCAPTCHA через RuCaptcha...")
+            solving_msg = await message.answer("⏳ Решаю reCAPTCHA через RuCaptcha...\n(может занять до 2-3 минут)")
             
             solver = CaptchaSolver(
                 api_key=config.captcha_api_key,
                 service=config.captcha_service
             )
             
-            token = await solver.solve_recaptcha_v2(
-                sitekey=exc.site_key or "6LdcRsEqAAAAAHUaNCc1GUe47g5jKlOzbJJiyIZt",
-                page_url="https://telegram.org",
-                timeout=config.captcha_timeout or 120
-            )
+            # Пробуем оба URL по очереди
+            for page_url in ["https://web.telegram.org", "https://telegram.org"]:
+                try:
+                    token = await solver.solve_recaptcha_v2(
+                        sitekey=exc.site_key or "6LdcRsEqAAAAAHUaNCc1GUe47g5jKlOzbJJiyIZt",
+                        page_url=page_url,
+                        timeout=config.captcha_timeout or 180
+                    )
+                    break
+                except Exception as e:
+                    logger.warning(f"Не удалось решить капчу с {page_url}: {e}")
+                    continue
+            else:
+                raise Exception("Не удалось решить капчу ни с одним URL")
             
             await solving_msg.edit_text("✅ Капча решена! Отправляю код...")
             
@@ -511,9 +520,47 @@ async def add_by_code_phone(message: Message, state: FSMContext, config: Config)
                 captcha_token=token,
             )
             
+            # Если код успешно отправлен — продолжаем flow
+            await state.update_data(
+                phone=phone,
+                phone_code_hash=code_request.phone_code_hash,
+                session_path=str(session_path),
+                login_id=login_id,
+                admin_id=admin_id,
+                runtime=runtime,
+                login_started_at=utc_now_iso(),
+                code="",
+            )
+            
+            if code_request.already_authorized and code_request.user:
+                await finalize_code_login(message, state, config, twofa=None, user=code_request.user)
+                return
+            if code_request.already_authorized:
+                await state.clear()
+                await message.answer("Сессия уже авторизована, но Telegram не вернул данные аккаунта.", reply_markup=accounts_menu())
+                return
+            if _code_request_is_blocked(code_request):
+                await state.clear()
+                await message.answer(_code_request_text(code_request), reply_markup=accounts_menu())
+                return
+            if _code_request_needs_email(code_request):
+                await state.set_state(AddByCode.waiting_email)
+                await message.answer(
+                    f"Telegram просит указать email для регистрации.\n\n"
+                    f"Raw type: {code_request.delivery_type}\n\n"
+                    "Отправь email, на который придет код подтверждения."
+                )
+                return
+            
+            info_text = _code_request_text(code_request)
+            await state.update_data(code_info_text=info_text)
+            await state.set_state(AddByCode.waiting_code)
+            await message.answer(_code_entry_text(info_text, ""), reply_markup=digit_code_keyboard())
+            return
+            
         except Exception as e:
             await state.clear()
-            await message.answer(f"❌ Не удалось решить капчу: {e}", reply_markup=accounts_menu())
+            await message.answer(f"❌ Не удалось решить капчу: {e}\n\nПопробуйте позже или используйте другой номер.", reply_markup=accounts_menu())
             return
         # =======================================
 

@@ -21,14 +21,18 @@ class CaptchaSolver:
         else:
             raise ValueError("service должен быть '2captcha', 'rucaptcha' или 'capsolver'")
     
-    async def solve_recaptcha_v2(self, sitekey: str, page_url: str = "https://telegram.org", timeout: int = 120) -> str:
+    async def solve_recaptcha_v2(self, sitekey: str, page_url: str = "https://web.telegram.org", timeout: int = 180) -> str:
         if self.service in ("2captcha", "rucaptcha"):
             return await self._solve_standard(sitekey, page_url, timeout)
         else:
             return await self._solve_capsolver(sitekey, page_url, timeout)
     
     async def _solve_standard(self, sitekey: str, page_url: str, timeout: int) -> str:
+        """Для 2Captcha, RuCaptcha (совместимые API)"""
         async with aiohttp.ClientSession() as session:
+            # 1. Отправляем капчу на решение с параметром recaptcha=1
+            logger.info(f"Отправка капчи в {self.service}: sitekey={sitekey[:20]}..., pageurl={page_url}")
+            
             async with session.post(
                 self.submit_url,
                 data={
@@ -36,18 +40,29 @@ class CaptchaSolver:
                     'method': 'userrecaptcha',
                     'googlekey': sitekey,
                     'pageurl': page_url,
-                    'json': 1
+                    'json': 1,
+                    'recaptcha': 1,  # <-- КЛЮЧЕВОЙ ПАРАМЕТР
                 }
             ) as resp:
                 result = await resp.json()
+                logger.info(f"Ответ от {self.service}: {result}")
+                
                 if result.get('status') != 1:
-                    raise Exception(f"Ошибка {self.service}: {result.get('request', 'Unknown error')}")
+                    error_msg = result.get('request', 'Unknown error')
+                    logger.error(f"Ошибка {self.service}: {error_msg}")
+                    raise Exception(f"Ошибка {self.service}: {error_msg}")
+                
                 captcha_id = result['request']
                 logger.info(f"Капча отправлена в {self.service}, ID: {captcha_id}")
             
+            # 2. Ждём решение с увеличенным интервалом
             start_time = asyncio.get_event_loop().time()
+            attempts = 0
+            
             while asyncio.get_event_loop().time() - start_time < timeout:
-                await asyncio.sleep(2)
+                await asyncio.sleep(3)  # увеличил до 3 секунд
+                attempts += 1
+                
                 async with session.get(
                     self.result_url,
                     params={
@@ -58,12 +73,21 @@ class CaptchaSolver:
                     }
                 ) as resp:
                     result = await resp.json()
+                    logger.debug(f"Попытка {attempts}: {result}")
+                    
                     if result.get('status') == 1:
                         token = result['request']
-                        logger.info(f"Капча решена! Токен: {token[:30]}...")
+                        logger.info(f"✅ Капча решена! Токен: {token[:30]}...")
                         return token
+                    
                     if result.get('request') == 'CAPCHA_NOT_READY':
                         continue
+                    
+                    # Если капча не решаема
+                    if result.get('request') == 'ERROR_CAPTCHA_UNSOLVABLE':
+                        logger.warning(f"Капча не решаема, пробуем ещё... (попытка {attempts})")
+                        continue
+                    
                     raise Exception(f"Ошибка {self.service}: {result.get('request', 'Unknown error')}")
             
             raise TimeoutError(f"Время ожидания решения капчи истекло ({timeout}с)")
