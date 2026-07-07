@@ -18,12 +18,16 @@ from telethon.errors import SessionPasswordNeededError
 from tglol.config import Config
 from tglol.db import (
     add_account,
+    add_captcha_request,
     count_accounts,
     delete_account_row,
     delete_all_accounts,
     get_account,
+    get_captcha_stats,
+    is_phone_on_captcha_cooldown,
     list_accounts,
     list_accounts_by_scope,
+    set_captcha_cooldown,
     update_account_status,
 )
 from tglol.desktop_profile import generated_account_json, random_android_runtime, utc_now_iso
@@ -419,6 +423,16 @@ async def _finalize_code_login_impl(
         reply_markup=accounts_menu(),
     )
 
+@router.message(F.text == "/captcha_stats")
+async def captcha_stats(message: Message, config: Config) -> None:
+    stats = get_captcha_stats(config)
+    await message.answer(
+        f"📊 <b>Статистика капчи</b>\n\n"
+        f"В обработке: {stats['pending']}\n"
+        f"В ожидании (cooldown): {stats['cooldown']}\n"
+        f"Всего запросов: {stats['total']}",
+        parse_mode="HTML",
+    )
 
 @router.callback_query(F.data == "noop")
 async def noop(callback: CallbackQuery) -> None:
@@ -460,11 +474,19 @@ async def add_by_code_phone(message: Message, state: FSMContext, config: Config)
         await message.answer("Номер некорректный. Отправь номер с кодом страны, например: +15074486037")
         return
 
+    if is_phone_on_captcha_cooldown(config, phone):
+        await message.answer(
+            f"⏳ Этот номер на капче. Подождите {config.captcha_cooldown_minutes} минут или попробуйте другой номер.",
+            reply_markup=accounts_menu(),
+        )
+        return
+
     runtime = random_android_runtime()
     admin_id = message.from_user.id if message.from_user else 0
     login_id = secrets.token_hex(4)
     phone_digits = phone.lstrip("+")
     session_path = unique_path(config.temp_dir, f"temp_session_{admin_id}_{phone_digits}_{login_id}.session")
+
     try:
         code_request = await send_code(
             session_path,
@@ -474,8 +496,17 @@ async def add_by_code_phone(message: Message, state: FSMContext, config: Config)
             runtime,
         )
     except TelegramCaptchaRequired as exc:
+        add_captcha_request(config, phone, exc.site_key)
+        set_captcha_cooldown(config, phone, config.captcha_cooldown_minutes)
+
         await state.clear()
-        await message.answer(_friendly_code_error(exc), reply_markup=accounts_menu())
+        await message.answer(
+            f"❌ Telegram запросил капчу для номера {phone}\n\n"
+            f"SiteKey: <code>{exc.site_key or 'неизвестен'}</code>\n\n"
+            f"⏳ Номер добавлен в список ожидания. Попробуйте снова через {config.captcha_cooldown_minutes} минут.\n"
+            f"Можно попробовать с другого номера или IP.",
+            reply_markup=accounts_menu(),
+        )
         return
     except Exception as exc:
         await state.clear()

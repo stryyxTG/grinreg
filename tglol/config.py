@@ -21,6 +21,7 @@ class Config:
     default_lang_code: str
     default_system_lang_code: str
     default_lang_pack: str
+    captcha_cooldown_minutes: int = 30
 
 
 def _get_required(name: str) -> str:
@@ -69,4 +70,5 @@ def load_config() -> Config:
         default_lang_code=os.getenv("DEFAULT_LANG_CODE", "en"),
         default_system_lang_code=os.getenv("DEFAULT_SYSTEM_LANG_CODE", "en-US"),
         default_lang_pack=os.getenv("DEFAULT_LANG_PACK", "android"),
+        captcha_cooldown_minutes=int(os.getenv("CAPTCHA_COOLDOWN_MINUTES", "30")),
     )

@@ -27,6 +27,15 @@ CREATE TABLE IF NOT EXISTS accounts (
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS captcha_requests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    phone TEXT NOT NULL,
+    site_key TEXT,
+    created_at TEXT NOT NULL,
+    cooldown_until TEXT,
+    status TEXT NOT NULL DEFAULT 'pending'
+);
 """
 
 
@@ -167,3 +176,40 @@ def delete_all_accounts(config: Config) -> int:
     with connect(config) as connection:
         cursor = connection.execute("DELETE FROM accounts")
         return int(cursor.rowcount or 0)
+
+def add_captcha_request(config: Config, phone: str, site_key: str | None = None) -> int:
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    with connect(config) as conn:
+        cursor = conn.execute(
+            "INSERT INTO captcha_requests (phone, site_key, created_at, status) VALUES (?, ?, ?, 'pending')",
+            (phone, site_key, now)
+        )
+        return int(cursor.lastrowid)
+
+def set_captcha_cooldown(config: Config, phone: str, minutes: int = 30) -> None:
+    from datetime import datetime, timedelta, timezone
+    cooldown_until = (datetime.now(timezone.utc) + timedelta(minutes=minutes)).isoformat(timespec="seconds")
+    with connect(config) as conn:
+        conn.execute(
+            "UPDATE captcha_requests SET status = 'cooldown', cooldown_until = ? WHERE phone = ? AND status = 'pending'",
+            (cooldown_until, phone)
+        )
+        conn.commit()
+
+def is_phone_on_captcha_cooldown(config: Config, phone: str) -> bool:
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    with connect(config) as conn:
+        row = conn.execute(
+            "SELECT cooldown_until FROM captcha_requests WHERE phone = ? AND status = 'cooldown' AND cooldown_until > ? ORDER BY id DESC LIMIT 1",
+            (phone, now)
+        ).fetchone()
+        return row is not None
+
+def get_captcha_stats(config: Config) -> dict:
+    with connect(config) as conn:
+        pending = conn.execute("SELECT COUNT(*) FROM captcha_requests WHERE status = 'pending'").fetchone()[0]
+        cooldown = conn.execute("SELECT COUNT(*) FROM captcha_requests WHERE status = 'cooldown'").fetchone()[0]
+        total = conn.execute("SELECT COUNT(*) FROM captcha_requests").fetchone()[0]
+        return {"pending": pending, "cooldown": cooldown, "total": total}
