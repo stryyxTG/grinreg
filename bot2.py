@@ -8,6 +8,7 @@ from tglol.config import load_config
 from tglol.db import init_db
 from tglol.handlers import router
 from tglol.paths import ensure_storage
+from tglol.handlers import router
 
 
 async def main() -> None:
