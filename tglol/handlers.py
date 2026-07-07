@@ -475,7 +475,7 @@ async def add_by_code_phone(message: Message, state: FSMContext, config: Config)
             runtime,
         )
     except TelegramCaptchaRequired as exc:
-        # ===== ОБХОД КАПЧИ ЧЕРЕЗ RUCAPTCHA =====
+    # ===== ОБХОД КАПЧИ ЧЕРЕЗ RUCAPTCHA =====
         if not config.captcha_api_key or not config.captcha_service:
             await state.clear()
             await message.answer(

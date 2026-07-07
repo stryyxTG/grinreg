@@ -74,7 +74,7 @@ async def send_code(
     runtime: dict[str, str],
     *,
     unknown_number: bool = False,
-    captcha_token: str | None = None,  # <-- НОВЫЙ ПАРАМЕТР
+    captcha_token: str | None = None,  # <-- ДОБАВЛЕНО
 ) -> CodeRequest:
     client = client_for(session_path, api_id, api_hash, runtime)
     await client.connect()
@@ -93,22 +93,18 @@ async def send_code(
             )
 
         try:
-            # Базовые настройки
             settings = types.CodeSettings(
                 allow_flashcall=True,
                 allow_missed_call=True,
                 unknown_number=unknown_number,
             )
             
-            # Если есть токен капчи - добавляем его
+            # Если есть токен капчи - пробуем передать
             if captcha_token:
-                # В некоторых версиях Telethon может не поддерживать recaptcha_token
-                # Добавляем через setattr если нужно
                 try:
                     settings.recaptcha_token = captcha_token
                 except AttributeError:
-                    logger.warning("Telethon версия не поддерживает recaptcha_token, пробуем другой способ")
-                    # Если не поддерживается, пробуем через дополнительный параметр
+                    # Старая версия Telethon, пробуем другой способ
                     pass
             
             sent = await client(

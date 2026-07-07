@@ -21,7 +21,6 @@ class Config:
     default_lang_code: str
     default_system_lang_code: str
     default_lang_pack: str
-    captcha_cooldown_minutes: int = 30
     captcha_api_key: str | None = None
     captcha_service: str | None = None
     captcha_timeout: int = 120
@@ -56,18 +55,22 @@ def _get_owner_ids() -> frozenset[int]:
 
 
 def load_config() -> Config:
-    load_dotenv()
+    # Загружаем .env из корня проекта
+    env_path = Path(__file__).parent.parent / ".env"
+    if env_path.exists():
+        load_dotenv(env_path)
+    else:
+        load_dotenv()
 
     data_dir = Path(os.getenv("DATA_DIR", "storage"))
     
-    captcha_api_key_raw = os.getenv("CAPTCHA_API_KEY", "").strip()
-    if captcha_api_key_raw and not captcha_api_key_raw.startswith("PUT_") and captcha_api_key_raw != "ваш_ключ_от_2captcha_или_capsolver":
-        captcha_api_key = captcha_api_key_raw
-    else:
+    # Загружаем ключ капчи
+    captcha_api_key = os.getenv("CAPTCHA_API_KEY", "").strip()
+    if not captcha_api_key or captcha_api_key.startswith("PUT_") or captcha_api_key == "ваш_ключ_от_2captcha_или_capsolver":
         captcha_api_key = None
     
-    captcha_service = os.getenv("CAPTCHA_SERVICE", "").strip()
-    if captcha_service and captcha_service not in ("2captcha", "rucaptcha", "capsolver"):
+    captcha_service = os.getenv("CAPTCHA_SERVICE", "").strip().lower()
+    if captcha_service not in ("2captcha", "rucaptcha", "capsolver"):
         captcha_service = None
     
     return Config(
@@ -84,7 +87,6 @@ def load_config() -> Config:
         default_lang_code=os.getenv("DEFAULT_LANG_CODE", "en"),
         default_system_lang_code=os.getenv("DEFAULT_SYSTEM_LANG_CODE", "en-US"),
         default_lang_pack=os.getenv("DEFAULT_LANG_PACK", "android"),
-        captcha_cooldown_minutes=int(os.getenv("CAPTCHA_COOLDOWN_MINUTES", "30")),
         captcha_api_key=captcha_api_key,
         captcha_service=captcha_service,
         captcha_timeout=int(os.getenv("CAPTCHA_TIMEOUT", "120")),
