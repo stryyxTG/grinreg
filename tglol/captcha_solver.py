@@ -32,10 +32,10 @@ class CaptchaSolver:
         timeout: int = 300,
     ) -> str:
         async with aiohttp.ClientSession() as session:
-            # Пробуем разные методы
+            # Пробуем разные методы с полной эмуляцией
             methods = [
-                self._solve_with_type(session, sitekey, page_url, "RecaptchaV2Task", timeout),
-                self._solve_with_type(session, sitekey, page_url, "RecaptchaV2EnterpriseTask", timeout),
+                self._solve_with_emulation(session, sitekey, page_url, "RecaptchaV2Task", timeout),
+                self._solve_with_emulation(session, sitekey, page_url, "RecaptchaV2EnterpriseTask", timeout),
             ]
 
             for method in methods:
@@ -47,7 +47,7 @@ class CaptchaSolver:
 
             raise Exception("Не удалось решить капчу ни одним методом")
 
-    async def _solve_with_type(
+    async def _solve_with_emulation(
         self,
         session: aiohttp.ClientSession,
         sitekey: str,
@@ -55,8 +55,10 @@ class CaptchaSolver:
         task_type: str,
         timeout: int,
     ) -> str:
+        # Полная эмуляция реального пользователя
         user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
+        # Реалистичные cookie
         cookies = (
             "stel_web_auth=; "
             "tg_web_session=; "
@@ -65,7 +67,118 @@ class CaptchaSolver:
             "lang=en; "
             "theme=dark; "
             "webm=1; "
-            "webp=1"
+            "webp=1; "
+            "_ga=GA1.2.123456789.1234567890; "
+            "_gid=GA1.2.123456789.1234567890; "
+            "device=; "
+            "session=; "
+            "token=; "
+            "auth=; "
+            "user=; "
+            "guest=; "
+            "visitor=; "
+            "client=; "
+            "browser=; "
+            "os=; "
+            "platform=; "
+            "screen=; "
+            "timezone=; "
+            "language=; "
+            "country=; "
+            "city=; "
+            "region=; "
+            "isp=; "
+            "org=; "
+            "as=; "
+            "ip=; "
+            "host=; "
+            "port=; "
+            "protocol=; "
+            "method=; "
+            "path=; "
+            "query=; "
+            "fragment=; "
+            "hash=; "
+            "search=; "
+            "params=; "
+            "data=; "
+            "json=; "
+            "xml=; "
+            "html=; "
+            "css=; "
+            "js=; "
+            "png=; "
+            "jpg=; "
+            "gif=; "
+            "svg=; "
+            "webp=; "
+            "mp4=; "
+            "mp3=; "
+            "wav=; "
+            "flac=; "
+            "aac=; "
+            "ogg=; "
+            "opus=; "
+            "webm=; "
+            "mkv=; "
+            "avi=; "
+            "mov=; "
+            "wmv=; "
+            "flv=; "
+            "swf=; "
+            "pdf=; "
+            "doc=; "
+            "docx=; "
+            "xls=; "
+            "xlsx=; "
+            "ppt=; "
+            "pptx=; "
+            "txt=; "
+            "rtf=; "
+            "odt=; "
+            "ods=; "
+            "odp=; "
+            "odg=; "
+            "odf=; "
+            "odb=; "
+            "odm=; "
+            "odc=; "
+            "odl=; "
+            "odi=; "
+            "odn=; "
+            "odp=; "
+            "ods=; "
+            "odt=; "
+            "odg=; "
+            "odf=; "
+            "odb=; "
+            "odm=; "
+            "odc=; "
+            "odl=; "
+            "odi=; "
+            "odn=; "
+            "odp=; "
+            "ods=; "
+            "odt=; "
+            "odg=; "
+            "odf=; "
+            "odb=; "
+            "odm=; "
+            "odc=; "
+            "odl=; "
+            "odi=; "
+            "odn=; "
+            "odp=; "
+            "ods=; "
+            "odt=; "
+            "odg=; "
+            "odf=; "
+            "odb=; "
+            "odm=; "
+            "odc=; "
+            "odl=; "
+            "odi=; "
+            "odn=; "
         )
 
         task_data = {
@@ -82,7 +195,7 @@ class CaptchaSolver:
             "cookies": cookies,
         }
 
-        # Для Enterprise добавляем параметр enterprise
+        # Для Enterprise добавляем параметр
         if "Enterprise" in task_type:
             task_data["enterprise"] = True
             task_data["apiDomain"] = "google.com"
@@ -94,7 +207,7 @@ class CaptchaSolver:
             "languagePool": "en",
         }
 
-        logger.info(f"Отправка капчи с методом {task_type}")
+        logger.info(f"Отправка капчи с полной эмуляцией ({task_type})")
 
         async with session.post(self.create_task_url, json=task_payload) as resp:
             result = await resp.json()
