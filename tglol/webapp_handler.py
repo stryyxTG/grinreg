@@ -8,7 +8,6 @@ from aiogram.types import Message, CallbackQuery, InlineKeyboardButton, InlineKe
 from aiogram.fsm.context import FSMContext
 
 from tglol.config import Config
-from tglol.db import add_account, get_balance
 from tglol.desktop_profile import random_android_runtime, utc_now_iso
 from tglol.paths import unique_path
 from tglol.telegram_service import send_code, sign_in_or_sign_up, sign_in_password, user_fields
@@ -70,11 +69,6 @@ async def _handle_register_start(message: Message, config: Config, state: FSMCon
     """Начинает процесс регистрации"""
     if not phone or not phone.startswith('+'):
         return {'action': 'error', 'message': 'Некорректный номер'}
-
-    # Проверяем баланс (можно убрать или оставить)
-    balance = get_balance(message.from_user.id)
-    if balance < 0.01:
-        return {'action': 'error', 'message': 'Недостаточно баланса. Пополните счёт.'}
 
     # Сохраняем номер в состояние
     await state.update_data(phone=phone)
