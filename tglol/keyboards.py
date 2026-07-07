@@ -3,9 +3,8 @@ from __future__ import annotations
 from collections.abc import Sequence
 from math import ceil
 
-from aiogram.types import InlineKeyboardMarkup
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-from aiogram.types import WebAppInfo
 
 ACCOUNTS_PER_PAGE = 14
 
@@ -121,9 +120,9 @@ def confirm_delete_all_accounts_menu() -> InlineKeyboardMarkup:
 def webapp_register_kb(webapp_url: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardBuilder(
+            [InlineKeyboardButton(
                 text="📱 Зарегистрировать аккаунт",
-                web_app=WebAppInfo(url=webapp_url)
+                web_app=WebAppInfo(url=webapp_url),
             )]
         ]
     )

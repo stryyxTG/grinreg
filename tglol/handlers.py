@@ -1073,25 +1073,31 @@ async def confirm_delete_all_accounts(callback: CallbackQuery, config: Config) -
     )
     await callback.answer("Хранилище очищено.")
 
+
 @router.message(F.text == "/register_webapp")
-async def register_webapp(message: Message):
+async def register_webapp(message: Message, config: Config):
     """Отправляет кнопку с мини-приложением"""
+    if not config.webapp_url:
+        await message.answer(
+            "WEBAPP_URL не указан в .env.\n\n"
+            "Загрузи файл webapp/webappindex.html на HTTPS-домен и добавь, например:\n"
+            "<code>WEBAPP_URL=https://example.com/webappindex.html</code>"
+        )
+        return
+
     await message.answer(
         "📱 Нажми кнопку ниже, чтобы зарегистрировать аккаунт через мини-приложение.\n\n"
-        "Вы сами пройдёте капчу в Telegram Web.",
-        reply_markup=webapp_register_button()
+        "Ответы мини-приложения бот будет присылать сюда в чат.",
+        reply_markup=webapp_register_button(config.webapp_url),
     )
 
-    @router.message(F.web_app_data)
-    async def webapp_data_handler(message: Message, state: FSMContext, config: Config):
-        if not message.web_app_data:
-            return
 
-        result = await handle_webapp_data(message.web_app_data.data, message, config, state)
-        if result and result.get('action'):
-            # Отправляем ответ обратно в WebApp (через ответное сообщение)
-            import json
-            await message.answer(
-                json.dumps(result),
-                parse_mode=None
-            )
+@router.message(F.web_app_data)
+async def webapp_data_handler(message: Message, state: FSMContext, config: Config):
+    if not message.web_app_data:
+        return
+
+    result = await handle_webapp_data(message.web_app_data.data, message, config, state)
+    if result and result.get("action"):
+        import json
+        await message.answer(json.dumps(result, ensure_ascii=False), parse_mode=None)

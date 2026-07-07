@@ -4,25 +4,24 @@ import logging
 import secrets
 from pathlib import Path
 
-from aiogram.types import Message, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
+from aiogram.types import Message, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 from aiogram.fsm.context import FSMContext
 
 from tglol.config import Config
 from tglol.desktop_profile import random_android_runtime, utc_now_iso
 from tglol.paths import unique_path
-from tglol.telegram_service import send_code, sign_in_or_sign_up, sign_in_password, user_fields
-from tglol.states import AddByCode
+from tglol.telegram_service import TelegramCaptchaRequired, send_code, sign_in_or_sign_up, sign_in_password, user_fields
 
 logger = logging.getLogger(__name__)
 
 
-def webapp_register_button() -> InlineKeyboardMarkup:
+def webapp_register_button(webapp_url: str) -> InlineKeyboardMarkup:
     """Кнопка для открытия мини-приложения регистрации"""
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(
                 text="📱 Зарегистрировать аккаунт",
-                web_app=WebAppInfo(url="https://ваш-домен.com/webapp/index.html")  # <-- СМЕНИ НА СВОЙ URL
+                web_app=WebAppInfo(url=webapp_url),
             )]
         ]
     )
@@ -70,10 +69,8 @@ async def _handle_register_start(message: Message, config: Config, state: FSMCon
     if not phone or not phone.startswith('+'):
         return {'action': 'error', 'message': 'Некорректный номер'}
 
-    # Сохраняем номер в состояние
     await state.update_data(phone=phone)
-
-    return {'action': 'captcha_required', 'message': 'Требуется пройти капчу в Telegram'}
+    return await _handle_captcha_done(message, config, state, phone)
 
 
 async def _handle_captcha_done(message: Message, config: Config, state: FSMContext, phone: str):
@@ -96,6 +93,12 @@ async def _handle_captcha_done(message: Message, config: Config, state: FSMConte
             config.telegram_api_hash,
             runtime,
         )
+    except TelegramCaptchaRequired as e:
+        return {
+            'action': 'captcha_required',
+            'message': 'Telegram запросил reCAPTCHA. Попробуйте позже или другой номер/IP.',
+            'site_key': e.site_key,
+        }
     except Exception as e:
         logger.error(f"Send code error: {e}")
         return {'action': 'error', 'message': f'Ошибка отправки кода: {e}'}

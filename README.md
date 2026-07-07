@@ -67,6 +67,12 @@ OWNER_IDS=111111111,222222222,333333333
 
 `ADMIN_IDS` тоже поддерживается как fallback, но лучше использовать `OWNER_IDS`.
 
+Для мини-приложения загрузи `webapp/webappindex.html` на HTTPS-домен и добавь:
+
+```env
+WEBAPP_URL=https://example.com/webappindex.html
+```
+
 ## Запуск
 
 ```bash

