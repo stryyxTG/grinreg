@@ -4,6 +4,7 @@ import aiohttp
 import asyncio
 import logging
 import time
+import random
 
 logger = logging.getLogger(__name__)
 
@@ -15,7 +16,7 @@ class CaptchaSolver:
         self.create_task_url = "https://api.rucaptcha.com/createTask"
         self.get_result_url = "https://api.rucaptcha.com/getTaskResult"
 
-        # ===== ТВОЙ ПРОКСИ =====
+        # ТВОЙ ПРОКСИ
         self.proxy = {
             "type": "socks5",
             "host": "45.86.3.147",
@@ -31,7 +32,21 @@ class CaptchaSolver:
         timeout: int = 300,
     ) -> str:
         async with aiohttp.ClientSession() as session:
-            # Используем метод RecaptchaV2Task (с прокси)
+            # Генерируем реалистичный User-Agent
+            user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+
+            # Добавляем cookies (имитация сессии)
+            cookies = (
+                "stel_web_auth=; "
+                "tg_web_session=; "
+                "device_id=; "
+                "ip_country=; "
+                "lang=en; "
+                "theme=dark; "
+                "webm=1; "
+                "webp=1"
+            )
+
             task_data = {
                 "type": "RecaptchaV2Task",
                 "websiteURL": page_url,
@@ -42,16 +57,18 @@ class CaptchaSolver:
                 "proxyPort": self.proxy["port"],
                 "proxyLogin": self.proxy["username"],
                 "proxyPassword": self.proxy["password"],
-                "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "userAgent": user_agent,
+                "cookies": cookies,
             }
 
             task_payload = {
                 "clientKey": self.api_key,
                 "task": task_data,
                 "softId": 3898,
+                "languagePool": "en",
             }
 
-            logger.info(f"Отправка капчи через прокси: {self.proxy['host']}:{self.proxy['port']}")
+            logger.info(f"Отправка капчи через прокси с User-Agent и cookies")
 
             async with session.post(self.create_task_url, json=task_payload) as resp:
                 result = await resp.json()
@@ -91,7 +108,7 @@ class CaptchaSolver:
                     if status == "ready":
                         token = result.get("solution", {}).get("gRecaptchaResponse")
                         if token:
-                            logger.info(f"✅ Капча решена через твой прокси!")
+                            logger.info(f"✅ Капча решена!")
                             return token
                         raise Exception("Нет токена")
 
@@ -101,3 +118,5 @@ class CaptchaSolver:
                         continue
                     else:
                         raise Exception(f"Неизвестный статус: {status}")
+
+            raise TimeoutError(f"Таймаут {timeout}с")
