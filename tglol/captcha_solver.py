@@ -15,26 +15,43 @@ class CaptchaSolver:
         self.create_task_url = "https://api.rucaptcha.com/createTask"
         self.get_result_url = "https://api.rucaptcha.com/getTaskResult"
 
+        # ===== ТВОЙ ПРОКСИ =====
+        self.proxy = {
+            "type": "socks5",
+            "host": "45.86.3.147",
+            "port": 14893,
+            "username": "user335792",
+            "password": "9etya2",
+        }
+
     async def solve_recaptcha_v2(
         self,
         sitekey: str,
         page_url: str = "https://web.telegram.org",
-        timeout: int = 180,
+        timeout: int = 300,
     ) -> str:
         async with aiohttp.ClientSession() as session:
-            # 1. Создаем задачу
+            # Используем метод RecaptchaV2Task (с прокси)
+            task_data = {
+                "type": "RecaptchaV2Task",
+                "websiteURL": page_url,
+                "websiteKey": sitekey,
+                "isInvisible": False,
+                "proxyType": self.proxy["type"],
+                "proxyAddress": self.proxy["host"],
+                "proxyPort": self.proxy["port"],
+                "proxyLogin": self.proxy["username"],
+                "proxyPassword": self.proxy["password"],
+                "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            }
+
             task_payload = {
                 "clientKey": self.api_key,
-                "task": {
-                    "type": "RecaptchaV2TaskProxyless",
-                    "websiteURL": page_url,
-                    "websiteKey": sitekey,
-                    "isInvisible": False,
-                },
+                "task": task_data,
                 "softId": 3898,
             }
 
-            logger.info(f"Отправка капчи в RuCaptcha: sitekey={sitekey[:20]}..., pageurl={page_url}")
+            logger.info(f"Отправка капчи через прокси: {self.proxy['host']}:{self.proxy['port']}")
 
             async with session.post(self.create_task_url, json=task_payload) as resp:
                 result = await resp.json()
@@ -50,12 +67,11 @@ class CaptchaSolver:
 
                 logger.info(f"Задача создана, taskId: {task_id}")
 
-            # 2. Ожидаем результат
             start_time = time.time()
             attempts = 0
 
             while time.time() - start_time < timeout:
-                await asyncio.sleep(2)
+                await asyncio.sleep(3)
                 attempts += 1
 
                 result_payload = {
@@ -73,13 +89,11 @@ class CaptchaSolver:
 
                     status = result.get("status")
                     if status == "ready":
-                        solution = result.get("solution", {})
-                        token = solution.get("gRecaptchaResponse") or solution.get("token")
+                        token = result.get("solution", {}).get("gRecaptchaResponse")
                         if token:
-                            logger.info(f"✅ Капча решена! Токен: {token[:30]}...")
+                            logger.info(f"✅ Капча решена через твой прокси!")
                             return token
-                        else:
-                            raise Exception("RuCaptcha вернул решение без токена")
+                        raise Exception("Нет токена")
 
                     elif status == "processing":
                         if attempts % 5 == 0:
@@ -87,5 +101,3 @@ class CaptchaSolver:
                         continue
                     else:
                         raise Exception(f"Неизвестный статус: {status}")
-
-            raise TimeoutError(f"Время ожидания решения капчи истекло ({timeout}с)")
