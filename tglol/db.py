@@ -177,6 +177,7 @@ def delete_all_accounts(config: Config) -> int:
         cursor = connection.execute("DELETE FROM accounts")
         return int(cursor.rowcount or 0)
 
+
 def add_captcha_request(config: Config, phone: str, site_key: str | None = None) -> int:
     from datetime import datetime, timezone
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -186,6 +187,7 @@ def add_captcha_request(config: Config, phone: str, site_key: str | None = None)
             (phone, site_key, now)
         )
         return int(cursor.lastrowid)
+
 
 def set_captcha_cooldown(config: Config, phone: str, minutes: int = 30) -> None:
     from datetime import datetime, timedelta, timezone
@@ -197,6 +199,7 @@ def set_captcha_cooldown(config: Config, phone: str, minutes: int = 30) -> None:
         )
         conn.commit()
 
+
 def is_phone_on_captcha_cooldown(config: Config, phone: str) -> bool:
     from datetime import datetime, timezone
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -207,9 +210,20 @@ def is_phone_on_captcha_cooldown(config: Config, phone: str) -> bool:
         ).fetchone()
         return row is not None
 
+
 def get_captcha_stats(config: Config) -> dict:
     with connect(config) as conn:
         pending = conn.execute("SELECT COUNT(*) FROM captcha_requests WHERE status = 'pending'").fetchone()[0]
         cooldown = conn.execute("SELECT COUNT(*) FROM captcha_requests WHERE status = 'cooldown'").fetchone()[0]
         total = conn.execute("SELECT COUNT(*) FROM captcha_requests").fetchone()[0]
         return {"pending": pending, "cooldown": cooldown, "total": total}
+
+
+def clear_captcha_cooldown(config: Config, phone: str) -> None:
+    """Сбрасывает cooldown для номера (для админа)"""
+    with connect(config) as conn:
+        conn.execute(
+            "UPDATE captcha_requests SET status = 'resolved', cooldown_until = NULL WHERE phone = ? AND status = 'cooldown'",
+            (phone,)
+        )
+        conn.commit()

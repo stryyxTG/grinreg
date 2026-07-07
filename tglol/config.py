@@ -22,6 +22,9 @@ class Config:
     default_system_lang_code: str
     default_lang_pack: str
     captcha_cooldown_minutes: int = 30
+    captcha_api_key: str | None = None
+    captcha_service: str | None = None
+    captcha_timeout: int = 120
 
 
 def _get_required(name: str) -> str:
@@ -56,6 +59,18 @@ def load_config() -> Config:
     load_dotenv()
 
     data_dir = Path(os.getenv("DATA_DIR", "storage"))
+    
+    # Парсим captcha_api_key - если не задан или плейсхолдер, то None
+    captcha_api_key_raw = os.getenv("CAPTCHA_API_KEY", "").strip()
+    if captcha_api_key_raw and not captcha_api_key_raw.startswith("PUT_") and captcha_api_key_raw != "ваш_ключ_от_2captcha_или_capsolver":
+        captcha_api_key = captcha_api_key_raw
+    else:
+        captcha_api_key = None
+    
+    captcha_service = os.getenv("CAPTCHA_SERVICE", "").strip()
+    if captcha_service and captcha_service not in ("2captcha", "rucaptcha", "capsolver"):
+        captcha_service = None
+    
     return Config(
         bot_token=_get_required("BOT_TOKEN"),
         admin_ids=_get_owner_ids(),
@@ -71,4 +86,7 @@ def load_config() -> Config:
         default_system_lang_code=os.getenv("DEFAULT_SYSTEM_LANG_CODE", "en-US"),
         default_lang_pack=os.getenv("DEFAULT_LANG_PACK", "android"),
         captcha_cooldown_minutes=int(os.getenv("CAPTCHA_COOLDOWN_MINUTES", "30")),
+        captcha_api_key=captcha_api_key,
+        captcha_service=captcha_service,
+        captcha_timeout=int(os.getenv("CAPTCHA_TIMEOUT", "120")),
     )

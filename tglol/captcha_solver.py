@@ -30,7 +30,6 @@ class CaptchaSolver:
     async def _solve_standard(self, sitekey: str, page_url: str, timeout: int) -> str:
         """Для 2Captcha и Rucaptcha (совместимые API)"""
         async with aiohttp.ClientSession() as session:
-            # 1. Отправляем капчу на решение
             async with session.post(
                 self.submit_url,
                 data={
@@ -47,7 +46,6 @@ class CaptchaSolver:
                 captcha_id = result['request']
                 logger.info(f"Капча отправлена в {self.service}, ID: {captcha_id}")
             
-            # 2. Ждём решение
             start_time = asyncio.get_event_loop().time()
             while asyncio.get_event_loop().time() - start_time < timeout:
                 await asyncio.sleep(2)
