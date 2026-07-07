@@ -16,7 +16,7 @@ class CaptchaSolver:
         self.create_task_url = "https://api.rucaptcha.com/createTask"
         self.get_result_url = "https://api.rucaptcha.com/getTaskResult"
 
-        # ТВОЙ ПРОКСИ
+        # Твой прокси (можно заменить на другой)
         self.proxy = {
             "type": "socks5",
             "host": "45.86.3.147",
@@ -31,11 +31,14 @@ class CaptchaSolver:
         page_url: str = "https://web.telegram.org",
         timeout: int = 300,
     ) -> str:
+        """
+        Решает reCAPTCHA v2 через RuCaptcha с максимальной эмуляцией.
+        """
         async with aiohttp.ClientSession() as session:
-            # Пробуем разные методы с полной эмуляцией
+            # Список методов для перебора
             methods = [
-                self._solve_with_emulation(session, sitekey, page_url, "RecaptchaV2Task", timeout),
-                self._solve_with_emulation(session, sitekey, page_url, "RecaptchaV2EnterpriseTask", timeout),
+                self._solve_with_params(session, sitekey, page_url, "RecaptchaV2Task", timeout),
+                self._solve_with_params(session, sitekey, page_url, "RecaptchaV2EnterpriseTask", timeout),
             ]
 
             for method in methods:
@@ -47,7 +50,7 @@ class CaptchaSolver:
 
             raise Exception("Не удалось решить капчу ни одним методом")
 
-    async def _solve_with_emulation(
+    async def _solve_with_params(
         self,
         session: aiohttp.ClientSession,
         sitekey: str,
@@ -55,10 +58,15 @@ class CaptchaSolver:
         task_type: str,
         timeout: int,
     ) -> str:
-        # Полная эмуляция реального пользователя
-        user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        """Решает капчу с максимальными параметрами эмуляции."""
+        # Реалистичный User-Agent
+        user_agent = random.choice([
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        ])
 
-        # Реалистичные cookie
+        # Реалистичные cookies
         cookies = (
             "stel_web_auth=; "
             "tg_web_session=; "
@@ -68,119 +76,11 @@ class CaptchaSolver:
             "theme=dark; "
             "webm=1; "
             "webp=1; "
-            "_ga=GA1.2.123456789.1234567890; "
-            "_gid=GA1.2.123456789.1234567890; "
-            "device=; "
-            "session=; "
-            "token=; "
-            "auth=; "
-            "user=; "
-            "guest=; "
-            "visitor=; "
-            "client=; "
-            "browser=; "
-            "os=; "
-            "platform=; "
-            "screen=; "
-            "timezone=; "
-            "language=; "
-            "country=; "
-            "city=; "
-            "region=; "
-            "isp=; "
-            "org=; "
-            "as=; "
-            "ip=; "
-            "host=; "
-            "port=; "
-            "protocol=; "
-            "method=; "
-            "path=; "
-            "query=; "
-            "fragment=; "
-            "hash=; "
-            "search=; "
-            "params=; "
-            "data=; "
-            "json=; "
-            "xml=; "
-            "html=; "
-            "css=; "
-            "js=; "
-            "png=; "
-            "jpg=; "
-            "gif=; "
-            "svg=; "
-            "webp=; "
-            "mp4=; "
-            "mp3=; "
-            "wav=; "
-            "flac=; "
-            "aac=; "
-            "ogg=; "
-            "opus=; "
-            "webm=; "
-            "mkv=; "
-            "avi=; "
-            "mov=; "
-            "wmv=; "
-            "flv=; "
-            "swf=; "
-            "pdf=; "
-            "doc=; "
-            "docx=; "
-            "xls=; "
-            "xlsx=; "
-            "ppt=; "
-            "pptx=; "
-            "txt=; "
-            "rtf=; "
-            "odt=; "
-            "ods=; "
-            "odp=; "
-            "odg=; "
-            "odf=; "
-            "odb=; "
-            "odm=; "
-            "odc=; "
-            "odl=; "
-            "odi=; "
-            "odn=; "
-            "odp=; "
-            "ods=; "
-            "odt=; "
-            "odg=; "
-            "odf=; "
-            "odb=; "
-            "odm=; "
-            "odc=; "
-            "odl=; "
-            "odi=; "
-            "odn=; "
-            "odp=; "
-            "ods=; "
-            "odt=; "
-            "odg=; "
-            "odf=; "
-            "odb=; "
-            "odm=; "
-            "odc=; "
-            "odl=; "
-            "odi=; "
-            "odn=; "
-            "odp=; "
-            "ods=; "
-            "odt=; "
-            "odg=; "
-            "odf=; "
-            "odb=; "
-            "odm=; "
-            "odc=; "
-            "odl=; "
-            "odi=; "
-            "odn=; "
+            f"_ga=GA1.2.{random.randint(100000, 999999)}.{int(time.time())}; "
+            f"_gid=GA1.2.{random.randint(100000, 999999)}.{int(time.time())}"
         )
 
+        # Формируем задачу
         task_data = {
             "type": task_type,
             "websiteURL": page_url,
@@ -195,7 +95,7 @@ class CaptchaSolver:
             "cookies": cookies,
         }
 
-        # Для Enterprise добавляем параметр
+        # Для Enterprise добавляем параметры
         if "Enterprise" in task_type:
             task_data["enterprise"] = True
             task_data["apiDomain"] = "google.com"
@@ -207,7 +107,7 @@ class CaptchaSolver:
             "languagePool": "en",
         }
 
-        logger.info(f"Отправка капчи с полной эмуляцией ({task_type})")
+        logger.info(f"Отправка капчи с методом {task_type}")
 
         async with session.post(self.create_task_url, json=task_payload) as resp:
             result = await resp.json()
@@ -223,6 +123,7 @@ class CaptchaSolver:
 
             logger.info(f"Задача создана, taskId: {task_id} ({task_type})")
 
+        # Ожидаем результат
         start_time = time.time()
         attempts = 0
 
