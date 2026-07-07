@@ -3,124 +3,87 @@ from __future__ import annotations
 import aiohttp
 import asyncio
 import logging
+import time
 
 logger = logging.getLogger(__name__)
 
 
 class CaptchaSolver:
-    def __init__(self, api_key: str, service: str = "2captcha"):
+    def __init__(self, api_key: str, service: str = "rucaptcha"):
         self.api_key = api_key
         self.service = service
-        
-        if service in ("2captcha", "rucaptcha"):
-            self.submit_url = f"https://{service}.com/in.php"
-            self.result_url = f"https://{service}.com/res.php"
-        elif service == "capsolver":
-            self.submit_url = "https://api.capsolver.com/createTask"
-            self.result_url = "https://api.capsolver.com/getTaskResult"
-        else:
-            raise ValueError("service должен быть '2captcha', 'rucaptcha' или 'capsolver'")
-    
+
+        # Новый API RuCaptcha
+        self.create_task_url = "https://api.rucaptcha.com/createTask"
+        self.get_result_url = "https://api.rucaptcha.com/getTaskResult"
+
     async def solve_recaptcha_v2(self, sitekey: str, page_url: str = "https://web.telegram.org", timeout: int = 180) -> str:
-        if self.service in ("2captcha", "rucaptcha"):
-            return await self._solve_standard(sitekey, page_url, timeout)
-        else:
-            return await self._solve_capsolver(sitekey, page_url, timeout)
-    
-    async def _solve_standard(self, sitekey: str, page_url: str, timeout: int) -> str:
-        """Для 2Captcha, RuCaptcha (совместимые API)"""
+        """
+        Решает reCAPTCHA v2 через новый API RuCaptcha (RecaptchaV2TaskProxyless)
+        """
         async with aiohttp.ClientSession() as session:
-            # 1. Отправляем капчу на решение с параметром recaptcha=1
-            logger.info(f"Отправка капчи в {self.service}: sitekey={sitekey[:20]}..., pageurl={page_url}")
-            
-            async with session.post(
-                self.submit_url,
-                data={
-                    'key': self.api_key,
-                    'method': 'userrecaptcha',
-                    'googlekey': sitekey,
-                    'pageurl': page_url,
-                    'json': 1,
-                    'recaptcha': 1,  # <-- КЛЮЧЕВОЙ ПАРАМЕТР
-                }
-            ) as resp:
-                result = await resp.json()
-                logger.info(f"Ответ от {self.service}: {result}")
-                
-                if result.get('status') != 1:
-                    error_msg = result.get('request', 'Unknown error')
-                    logger.error(f"Ошибка {self.service}: {error_msg}")
-                    raise Exception(f"Ошибка {self.service}: {error_msg}")
-                
-                captcha_id = result['request']
-                logger.info(f"Капча отправлена в {self.service}, ID: {captcha_id}")
-            
-            # 2. Ждём решение с увеличенным интервалом
-            start_time = asyncio.get_event_loop().time()
-            attempts = 0
-            
-            while asyncio.get_event_loop().time() - start_time < timeout:
-                await asyncio.sleep(3)  # увеличил до 3 секунд
-                attempts += 1
-                
-                async with session.get(
-                    self.result_url,
-                    params={
-                        'key': self.api_key,
-                        'action': 'get',
-                        'id': captcha_id,
-                        'json': 1
-                    }
-                ) as resp:
-                    result = await resp.json()
-                    logger.debug(f"Попытка {attempts}: {result}")
-                    
-                    if result.get('status') == 1:
-                        token = result['request']
-                        logger.info(f"✅ Капча решена! Токен: {token[:30]}...")
-                        return token
-                    
-                    if result.get('request') == 'CAPCHA_NOT_READY':
-                        continue
-                    
-                    # Если капча не решаема
-                    if result.get('request') == 'ERROR_CAPTCHA_UNSOLVABLE':
-                        logger.warning(f"Капча не решаема, пробуем ещё... (попытка {attempts})")
-                        continue
-                    
-                    raise Exception(f"Ошибка {self.service}: {result.get('request', 'Unknown error')}")
-            
-            raise TimeoutError(f"Время ожидания решения капчи истекло ({timeout}с)")
-    
-    async def _solve_capsolver(self, sitekey: str, page_url: str, timeout: int) -> str:
-        async with aiohttp.ClientSession() as session:
-            payload = {
+            # 1. Создаем задачу
+            task_payload = {
                 "clientKey": self.api_key,
                 "task": {
                     "type": "RecaptchaV2TaskProxyless",
                     "websiteURL": page_url,
-                    "websiteKey": sitekey
-                }
+                    "websiteKey": sitekey,
+                    "isInvisible": False,
+                },
+                "softId": 3898,  # идентификатор софта
             }
-            async with session.post(self.submit_url, json=payload) as resp:
+
+            logger.info(f"Создаю задачу в RuCaptcha: sitekey={sitekey[:20]}..., pageurl={page_url}")
+
+            async with session.post(self.create_task_url, json=task_payload) as resp:
                 result = await resp.json()
-                if result.get('errorId') != 0:
-                    raise Exception(f"Ошибка CapSolver: {result.get('errorDescription', 'Unknown error')}")
-                task_id = result['taskId']
-                logger.info(f"Капча отправлена в CapSolver, ID: {task_id}")
-            
-            start_time = asyncio.get_event_loop().time()
-            while asyncio.get_event_loop().time() - start_time < timeout:
-                await asyncio.sleep(2)
-                payload = {"clientKey": self.api_key, "taskId": task_id}
-                async with session.post(self.result_url, json=payload) as resp:
+                logger.info(f"Ответ createTask: {result}")
+
+                if result.get("errorId", 0) != 0:
+                    error_desc = result.get("errorDescription", "Unknown error")
+                    raise Exception(f"Ошибка RuCaptcha: {error_desc}")
+
+                task_id = result.get("taskId")
+                if not task_id:
+                    raise Exception("RuCaptcha не вернул taskId")
+
+                logger.info(f"Задача создана, taskId: {task_id}")
+
+            # 2. Ожидаем результат
+            start_time = time.time()
+            attempts = 0
+
+            while time.time() - start_time < timeout:
+                await asyncio.sleep(3)
+                attempts += 1
+
+                result_payload = {
+                    "clientKey": self.api_key,
+                    "taskId": task_id,
+                }
+
+                async with session.post(self.get_result_url, json=result_payload) as resp:
                     result = await resp.json()
-                    if result.get('status') == 'ready':
-                        token = result['solution']['gRecaptchaResponse']
-                        logger.info(f"Капча решена! Токен: {token[:30]}...")
-                        return token
-                    if result.get('status') == 'processing':
+                    logger.debug(f"Попытка {attempts}: {result}")
+
+                    if result.get("errorId", 0) != 0:
+                        error_desc = result.get("errorDescription", "Unknown error")
+                        raise Exception(f"Ошибка RuCaptcha: {error_desc}")
+
+                    status = result.get("status")
+                    if status == "ready":
+                        solution = result.get("solution", {})
+                        token = solution.get("gRecaptchaResponse") or solution.get("token")
+                        if token:
+                            logger.info(f"✅ Капча решена! Токен: {token[:30]}...")
+                            return token
+                        else:
+                            raise Exception("RuCaptcha вернул решение без токена")
+
+                    elif status == "processing":
                         continue
-                    raise Exception(f"Ошибка CapSolver: {result.get('errorDescription', 'Unknown error')}")
-            
+                    else:
+                        raise Exception(f"Неизвестный статус: {status}")
+
             raise TimeoutError(f"Время ожидания решения капчи истекло ({timeout}с)")
